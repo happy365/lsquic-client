@@ -255,7 +255,8 @@ prog_connect (struct prog *prog)
                     (struct sockaddr *) &sport->sp_local_addr,
                     (struct sockaddr *) &sport->sas, sport, NULL,
                     prog->prog_hostname ? prog->prog_hostname : sport->host,
-                    prog->prog_max_packet_size))
+                    prog->prog_max_packet_size, sport->sp_token_buf,
+                    sport->sp_token_sz))
         return -1;
 
     prog_process_conns(prog);

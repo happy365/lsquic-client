@@ -110,6 +110,7 @@ link_directories( ${BORINGSSL_LIB}  )
 
 SET(CMAKE_INCLUDE_CURRENT_DIR ON)
 include_directories( include src/lshpack)
+include_directories( include src/lsqpack)
 IF(${CMAKE_SYSTEM_NAME} MATCHES "FreeBSD" OR ${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
     # Find libevent on FreeBSD:
     include_directories( /usr/local/include )
@@ -118,6 +119,7 @@ ENDIF()
 
 
 IF (NOT MSVC)
+
 add_executable(http_client
     test/http_client.c
     test/prog.c
@@ -127,6 +129,7 @@ target_link_libraries(http_client lsquic event pthread libssl.a libcrypto.a ${LI
 
 #MSVC
 ELSE()
+
 add_executable(http_client
     test/http_client.c
     test/prog.c
@@ -136,22 +139,21 @@ add_executable(http_client
 )
 
 target_link_libraries(http_client
-		debug  $(SolutionDir)src/liblsquic/debug/lsquic.lib
-		debug  ${VCPKG_BASE_DIR}/debug/lib/event.lib
-		debug  ${VCPKG_BASE_DIR}/debug/lib/zlibd.lib
-		debug  ${BORINGSSL_BASE_LIB_DIR}/ssl/debug/ssl.lib
-		debug  ${BORINGSSL_BASE_LIB_DIR}/crypto/debug/crypto.lib
-		ws2_32
-		optimized  $(SolutionDir)src/liblsquic/release/lsquic.lib
-		optimized  ${VCPKG_BASE_DIR}/lib/event.lib
-		optimized  ${VCPKG_BASE_DIR}/lib/zlib.lib
-		optimized  ${BORINGSSL_BASE_LIB_DIR}/ssl/release/ssl.lib
-		optimized  ${BORINGSSL_BASE_LIB_DIR}/crypto/release/crypto.lib
-		${LIBS} )
+                debug  $(SolutionDir)src/liblsquic/debug/lsquic.lib
+                debug  ${VCPKG_BASE_DIR}/debug/lib/event.lib
+                debug  ${VCPKG_BASE_DIR}/debug/lib/zlibd.lib
+                debug  ${BORINGSSL_BASE_LIB_DIR}/ssl/debug/ssl.lib
+                debug  ${BORINGSSL_BASE_LIB_DIR}/crypto/debug/crypto.lib
+                ws2_32
+                optimized  $(SolutionDir)src/liblsquic/release/lsquic.lib
+                optimized  ${VCPKG_BASE_DIR}/lib/event.lib
+                optimized  ${VCPKG_BASE_DIR}/lib/zlib.lib
+                optimized  ${BORINGSSL_BASE_LIB_DIR}/ssl/release/ssl.lib
+                optimized  ${BORINGSSL_BASE_LIB_DIR}/crypto/release/crypto.lib
+                ${LIBS} )
 
 ENDIF()
 
-#target_link_libraries(http_client lsquic event pthread libssl.a libcrypto.a ${LIBS} z m)
 
 add_subdirectory(src)
 

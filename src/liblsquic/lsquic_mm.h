@@ -24,6 +24,7 @@ struct lsquic_mm {
         struct malo     *stream_rec_arr;/* For struct stream_rec_arr */
         struct malo     *packet_in;     /* For struct lsquic_packet_in */
         struct malo     *packet_out;    /* For struct lsquic_packet_out */
+        struct malo     *dcid_elem;     /* For struct dcid_elem */
     }                    malo;
     TAILQ_HEAD(, lsquic_packet_in)  free_packets_in;
     SLIST_HEAD(, packet_out_buf)    packet_out_bufs[MM_N_OUT_BUCKETS];

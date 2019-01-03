@@ -18,6 +18,7 @@
 #endif
 #include <assert.h>
 #include <errno.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -94,6 +95,8 @@ struct http_client_ctx {
         HCC_PROCESSED_HEADERS   = (1 << 3),
     }                            hcc_flags;
     struct prog                 *prog;
+    const char                  *qif_file;
+    FILE                        *qif_fh;
 };
 
 struct lsquic_conn_ctx {
@@ -462,7 +465,7 @@ http_client_on_read (lsquic_stream_t *stream, lsquic_stream_ctx_t *st_h)
         if (nread > 0)
         {
             if (!(client_ctx->hcc_flags & HCC_DISCARD_RESPONSE))
-                write(STDOUT_FILENO, buf, nread);
+                (void) write(STDOUT_FILENO, buf, nread);
             if (randomly_reprioritize_streams && (st_h->count++ & 0x3F) == 0)
             {
                 old_prio = lsquic_stream_priority(stream);
@@ -472,7 +475,7 @@ http_client_on_read (lsquic_stream_t *stream, lsquic_stream_ctx_t *st_h)
 #endif
                 lsquic_stream_set_priority(stream, new_prio);
                 assert(s == 0);
-                LSQ_NOTICE("changed stream %u priority from %u to %u",
+                LSQ_NOTICE("changed stream %"PRIu64" priority from %u to %u",
                                 lsquic_stream_id(stream), old_prio, new_prio);
             }
         }
@@ -566,8 +569,10 @@ usage (const char *prog)
 "   -6          Prefer IPv6 when resolving hostname\n"
 #ifndef WIN32
 "   -C DIR      Certificate store.  If specified, server certificate will\n"
-#endif
 "                 be verified.\n"
+#endif
+"   -q FILE     QIF mode: issue requests from the QIF file and validate\n"
+"                 server responses.\n"
             , prog);
 }
 
@@ -767,15 +772,304 @@ static const struct lsquic_hset_if header_bypass_api =
 };
 
 
+static lsquic_conn_ctx_t *
+qif_client_on_new_conn (void *stream_if_ctx, lsquic_conn_t *conn)
+{
+    lsquic_conn_make_stream(conn);
+    return stream_if_ctx;
+}
+
+
+static void
+qif_client_on_conn_closed (lsquic_conn_t *conn)
+{
+    struct http_client_ctx *client_ctx = (void *) lsquic_conn_get_ctx(conn);
+    LSQ_INFO("connection is closed: stop engine");
+    prog_stop(client_ctx->prog);
+}
+
+
+struct qif_stream_ctx
+{
+    int                         reqno;
+    struct lsquic_http_headers  headers;
+    char                       *qif_str;
+    size_t                      qif_sz;
+    size_t                      qif_off;
+    char                       *resp_str;   /* qif_sz allocated */
+    size_t                      resp_off;   /* Read so far */
+    enum {
+        QSC_HEADERS_SENT = 1 << 0,
+        QSC_GOT_HEADERS  = 1 << 1,
+    }                           flags;
+};
+
+#define MAX(a, b) ((a) > (b) ? (a) : (b))
+
+lsquic_stream_ctx_t *
+qif_client_on_new_stream (void *stream_if_ctx, lsquic_stream_t *stream)
+{
+    struct http_client_ctx *const client_ctx = stream_if_ctx;
+    FILE *const fh = client_ctx->qif_fh;
+    struct qif_stream_ctx *ctx;
+    struct lsquic_http_header *header;
+    static int reqno;
+    size_t nalloc;
+    int i;
+    char *end, *tab, *line;
+    char line_buf[0x1000];
+
+    ctx = calloc(1, sizeof(*ctx));
+    if (!ctx)
+    {
+        perror("calloc");
+        exit(1);
+    }
+    ctx->reqno = reqno++;
+
+    nalloc = 0;
+    while ((line = fgets(line_buf, sizeof(line_buf), fh)))
+    {
+        end = strchr(line, '\n');
+        if (!end)
+        {
+            fprintf(stderr, "no newline\n");
+            exit(1);
+        }
+
+        if (end == line)
+            break;
+
+        if (*line == '#')
+            continue;
+
+        tab = strchr(line, '\t');
+        if (!tab)
+        {
+            fprintf(stderr, "no TAB\n");
+            exit(1);
+        }
+
+        if (nalloc + (end + 1 - line) > ctx->qif_sz)
+        {
+            if (nalloc)
+                nalloc = MAX(nalloc * 2, nalloc + (end + 1 - line));
+            else
+                nalloc = end + 1 - line;
+            ctx->qif_str = realloc(ctx->qif_str, nalloc);
+            if (!ctx->qif_str)
+            {
+                perror("realloc");
+                exit(1);
+            }
+        }
+        memcpy(ctx->qif_str + ctx->qif_sz, line, end + 1 - line);
+
+        ctx->headers.headers = realloc(ctx->headers.headers,
+                sizeof(ctx->headers.headers[0]) * (ctx->headers.count + 1));
+        if (!ctx->headers.headers)
+        {
+            perror("realloc");
+            exit(1);
+        }
+        header = &ctx->headers.headers[ctx->headers.count++];
+        header->name.iov_base = (void *) ctx->qif_sz;
+        header->name.iov_len = tab - line;
+        header->value.iov_base = (void *) (ctx->qif_sz + (tab - line + 1));
+        header->value.iov_len = end - tab - 1;
+
+        ctx->qif_sz += end + 1 - line;
+    }
+
+    for (i = 0; i < ctx->headers.count; ++i)
+    {
+        ctx->headers.headers[i].name.iov_base = ctx->qif_str
+                + (uintptr_t) ctx->headers.headers[i].name.iov_base;
+        ctx->headers.headers[i].value.iov_base = ctx->qif_str
+                + (uintptr_t) ctx->headers.headers[i].value.iov_base;
+    }
+
+    lsquic_stream_wantwrite(stream, 1);
+
+    if (!line)
+    {
+        LSQ_DEBUG("Input QIF file ends; close file handle");
+        fclose(client_ctx->qif_fh);
+        client_ctx->qif_fh = NULL;
+    }
+
+    return (void *) ctx;
+}
+
+
+static void
+qif_client_on_write (struct lsquic_stream *stream, lsquic_stream_ctx_t *h)
+{
+    struct qif_stream_ctx *const ctx = (void *) h;
+    size_t towrite;
+    ssize_t nw;
+
+    if (ctx->flags & QSC_HEADERS_SENT)
+    {
+        towrite = ctx->qif_sz - ctx->qif_off;
+        nw = lsquic_stream_write(stream, ctx->qif_str + ctx->qif_off, towrite);
+        if (nw >= 0)
+        {
+            LSQ_DEBUG("wrote %zd bytes to stream", nw);
+            ctx->qif_off += nw;
+            if (ctx->qif_off == (size_t) nw)
+            {
+                lsquic_stream_shutdown(stream, 1);
+                lsquic_stream_wantread(stream, 1);
+                LSQ_DEBUG("finished writing request %d", ctx->reqno);
+            }
+        }
+        else
+        {
+            LSQ_ERROR("cannot write to stream: %s", strerror(errno));
+            lsquic_stream_wantwrite(stream, 0);
+            lsquic_conn_abort(lsquic_stream_conn(stream));
+        }
+    }
+    else
+    {
+        if (0 == lsquic_stream_send_headers(stream, &ctx->headers, 0))
+        {
+            ctx->flags |= QSC_HEADERS_SENT;
+            LSQ_DEBUG("sent headers");
+        }
+        else
+        {
+            LSQ_ERROR("cannot send headers: %s", strerror(errno));
+            lsquic_stream_wantwrite(stream, 0);
+            lsquic_conn_abort(lsquic_stream_conn(stream));
+        }
+    }
+}
+
+
+static void
+qif_client_on_read (struct lsquic_stream *stream, lsquic_stream_ctx_t *h)
+{
+    struct qif_stream_ctx *const ctx = (void *) h;
+    struct hset *hset;
+    ssize_t nr;
+    unsigned char buf[1];
+
+    LSQ_DEBUG("reading response to request %d", ctx->reqno);
+
+    if (!(ctx->flags & QSC_GOT_HEADERS))
+    {
+        hset = lsquic_stream_get_hset(stream);
+        if (!hset)
+        {
+            LSQ_ERROR("could not get header set from stream");
+            exit(2);
+        }
+        LSQ_DEBUG("got header set for response %d", ctx->reqno);
+        hset_dump(hset, stdout);
+        hset_destroy(hset);
+        ctx->flags |= QSC_GOT_HEADERS;
+    }
+    else
+    {
+        if (!ctx->resp_str)
+        {
+            ctx->resp_str = malloc(ctx->qif_sz);
+            if (!ctx->resp_str)
+            {
+                perror("malloc");
+                exit(1);
+            }
+        }
+        if (ctx->resp_off < ctx->qif_sz)
+        {
+            nr = lsquic_stream_read(stream, ctx->resp_str + ctx->resp_off,
+                                        ctx->qif_sz - ctx->resp_off);
+            if (nr > 0)
+            {
+                ctx->resp_off += nr;
+                LSQ_DEBUG("read %zd bytes of reponse %d", nr, ctx->reqno);
+            }
+            else if (nr == 0)
+            {
+                LSQ_INFO("response %d too short", ctx->reqno);
+                LSQ_WARN("response %d FAIL", ctx->reqno);
+                lsquic_stream_shutdown(stream, 0);
+            }
+            else
+            {
+                LSQ_ERROR("error reading from stream");
+                lsquic_stream_wantread(stream, 0);
+                lsquic_conn_abort(lsquic_stream_conn(stream));
+            }
+        }
+        else
+        {
+            /* Collect EOF */
+            nr = lsquic_stream_read(stream, buf, sizeof(buf));
+            if (nr == 0)
+            {
+                if (0 == memcmp(ctx->qif_str, ctx->resp_str, ctx->qif_sz))
+                    LSQ_INFO("response %d OK", ctx->reqno);
+                else
+                    LSQ_WARN("response %d FAIL", ctx->reqno);
+                lsquic_stream_shutdown(stream, 0);
+            }
+            else if (nr > 0)
+            {
+                LSQ_INFO("response %d too long", ctx->reqno);
+                LSQ_WARN("response %d FAIL", ctx->reqno);
+                lsquic_stream_shutdown(stream, 0);
+            }
+            else
+            {
+                LSQ_ERROR("error reading from stream");
+                lsquic_stream_shutdown(stream, 0);
+                lsquic_conn_abort(lsquic_stream_conn(stream));
+            }
+        }
+    }
+}
+
+
+static void
+qif_client_on_close (struct lsquic_stream *stream, lsquic_stream_ctx_t *h)
+{
+    struct lsquic_conn *conn = lsquic_stream_conn(stream);
+    struct http_client_ctx *client_ctx = (void *) lsquic_conn_get_ctx(conn);
+    struct qif_stream_ctx *const ctx = (void *) h;
+    free(ctx->qif_str);
+    free(ctx->resp_str);
+    free(ctx->headers.headers);
+    free(ctx);
+    if (client_ctx->qif_fh)
+        lsquic_conn_make_stream(conn);
+    else
+        lsquic_conn_close(conn);
+}
+
+
+const struct lsquic_stream_if qif_client_if = {
+    .on_new_conn            = qif_client_on_new_conn,
+    .on_conn_closed         = qif_client_on_conn_closed,
+    .on_new_stream          = qif_client_on_new_stream,
+    .on_read                = qif_client_on_read,
+    .on_write               = qif_client_on_write,
+    .on_close               = qif_client_on_close,
+};
+
+
 int
 main (int argc, char **argv)
 {
-    int opt, s;
+    int opt, s, was_empty;
     struct http_client_ctx client_ctx;
     struct stat st;
     struct path_elem *pe;
     struct sport_head sports;
     struct prog prog;
+    const char *token = NULL;
 
     TAILQ_INIT(&sports);
     memset(&client_ctx, 0, sizeof(client_ctx));
@@ -794,7 +1088,8 @@ main (int argc, char **argv)
 
     prog_init(&prog, LSENG_HTTP, &sports, &http_client_if, &client_ctx);
 
-    while (-1 != (opt = getopt(argc, argv, PROG_OPTS "46Br:R:IKu:EP:M:n:H:p:h"
+    while (-1 != (opt = getopt(argc, argv, PROG_OPTS
+                                            "46Br:R:IKu:EP:M:n:H:p:q:t:h"
 #ifndef WIN32
                                                                           "C:"
 #endif
@@ -864,6 +1159,15 @@ main (int argc, char **argv)
             usage(argv[0]);
             prog_print_common_options(&prog, stdout);
             exit(0);
+        case 'q':
+            client_ctx.qif_file = optarg;
+            break;
+        case 't':
+            if (TAILQ_EMPTY(&sports))
+                token = optarg;
+            else
+                sport_set_token(TAILQ_LAST(&sports, sport_head), optarg);
+            break;
 #ifndef WIN32
         case 'C':
             prog.prog_api.ea_verify_cert = verify_server_cert;
@@ -876,19 +1180,46 @@ main (int argc, char **argv)
         }
     }
 
-    if (TAILQ_EMPTY(&client_ctx.hcc_path_elems))
+    if (client_ctx.qif_file)
+    {
+        client_ctx.qif_fh = fopen(client_ctx.qif_file, "r");
+        if (!client_ctx.qif_fh)
+        {
+            fprintf(stderr, "Cannot open %s for reading: %s\n",
+                                    client_ctx.qif_file, strerror(errno));
+            exit(1);
+        }
+        LSQ_NOTICE("opened QIF file %s for reading\n", client_ctx.qif_file);
+        prog.prog_api.ea_stream_if = &qif_client_if;
+        g_header_bypass = 1;
+        prog.prog_api.ea_hsi_if = &header_bypass_api;
+        prog.prog_api.ea_hsi_ctx = NULL;
+    }
+    else if (TAILQ_EMPTY(&client_ctx.hcc_path_elems))
     {
         fprintf(stderr, "Specify at least one path using -p option\n");
         exit(1);
     }
 
+    was_empty = TAILQ_EMPTY(&sports);
     if (0 != prog_prep(&prog))
     {
         LSQ_ERROR("could not prep");
         exit(EXIT_FAILURE);
     }
+    if (was_empty && token)
+        sport_set_token(TAILQ_LAST(&sports, sport_head), token);
 
-    create_connections(&client_ctx);
+    if (client_ctx.qif_file)
+    {
+        if (0 != prog_connect(&prog))
+        {
+            LSQ_ERROR("connection failed");
+            exit(EXIT_FAILURE);
+        }
+    }
+    else
+        create_connections(&client_ctx);
 
     LSQ_DEBUG("entering event loop");
 
@@ -902,6 +1233,9 @@ main (int argc, char **argv)
         TAILQ_REMOVE(&client_ctx.hcc_path_elems, pe, next_pe);
         free(pe);
     }
+
+    if (client_ctx.qif_fh)
+        (void) fclose(client_ctx.qif_fh);
 
     exit(0 == s ? EXIT_SUCCESS : EXIT_FAILURE);
 }

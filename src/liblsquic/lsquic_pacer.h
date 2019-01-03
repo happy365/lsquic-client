@@ -2,9 +2,12 @@
 #ifndef LSQUIC_PACER_H
 #define LSQUIC_PACER_H 1
 
+struct lsquic_conn;
+
 struct pacer
 {
-    lsquic_cid_t    pa_cid;             /* Used for logging */
+    const struct lsquic_conn
+                   *pa_conn;             /* Used for logging */
     lsquic_time_t   pa_next_sched;
     lsquic_time_t   pa_last_delayed;
     lsquic_time_t   pa_now;
@@ -39,7 +42,7 @@ struct pacer
 typedef lsquic_time_t (*tx_time_f)(void *ctx);
 
 void
-pacer_init (struct pacer *, lsquic_cid_t, unsigned max_intertick);
+pacer_init (struct pacer *, const struct lsquic_conn *, unsigned max_intertick);
 
 void
 pacer_cleanup (struct pacer *);

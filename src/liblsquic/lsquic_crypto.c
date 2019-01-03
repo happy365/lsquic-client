@@ -17,7 +17,6 @@
 
 #include "lsquic_types.h"
 #include "lsquic_crypto.h"
-#include "lsquic_alarmset.h"
 #include "lsquic_parse.h"
 #include "lsquic_util.h"
 #include "lsquic_str.h"

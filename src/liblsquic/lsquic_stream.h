@@ -2,8 +2,8 @@
 #ifndef LSQUIC_STREAM_H
 #define LSQUIC_STREAM_H
 
-#define LSQUIC_STREAM_HANDSHAKE 1
-#define LSQUIC_STREAM_HEADERS   3
+#define LSQUIC_GQUIC_STREAM_HANDSHAKE 1
+#define LSQUIC_GQUIC_STREAM_HEADERS   3
 
 #define LSQUIC_STREAM_DEFAULT_PRIO 16   /* RFC 7540, Section 5.3.5 */
 
@@ -12,6 +12,11 @@ struct lsquic_stream_ctx;
 struct lsquic_conn_public;
 struct stream_frame;
 struct uncompressed_headers;
+enum enc_level;
+enum swtp_status;
+struct frame_gen_ctx;
+struct data_frame;
+enum quic_ft_bit;
 
 TAILQ_HEAD(lsquic_streams_tailq, lsquic_stream);
 
@@ -29,60 +34,167 @@ TAILQ_HEAD(lsquic_streams_tailq, lsquic_stream);
 typedef unsigned char sm_hist_idx_t;
 #endif
 
-struct lsquic_stream
+/*
+ *  +----------+----------------------------------+
+ *  | Low Bits | Stream Type                      |
+ *  +----------+----------------------------------+
+ *  | 0x0      | Client-Initiated, Bidirectional  |
+ *  |          |                                  |
+ *  | 0x1      | Server-Initiated, Bidirectional  |
+ *  |          |                                  |
+ *  | 0x2      | Client-Initiated, Unidirectional |
+ *  |          |                                  |
+ *  | 0x3      | Server-Initiated, Unidirectional |
+ *  +----------+----------------------------------+
+ */
+
+enum stream_id_type
 {
-    uint32_t                        id;
-    enum stream_flags {
-        STREAM_WANT_READ    = (1 << 0),
-        STREAM_WANT_WRITE   = (1 << 1),
-        STREAM_FIN_RECVD    = (1 << 2),     /* Received STREAM frame with FIN bit set */
-        STREAM_RST_RECVD    = (1 << 3),     /* Received RST frame */
-        STREAM_SEND_WUF     = (1 << 4),     /* WUF: Window Update Frame */
-        STREAM_LAST_WRITE_OK= (1 << 5),     /* Used to break out of write event dispatch loop */
-        STREAM_SEND_BLOCKED = (1 << 6),
-        STREAM_SEND_RST     = (1 << 7),     /* Error: want to send RST_STREAM */
-        STREAM_U_READ_DONE  = (1 << 8),     /* User is done reading (shutdown was called) */
-        STREAM_U_WRITE_DONE = (1 << 9),     /* User is done writing (shutdown was called) */
-        STREAM_FIN_SENT     = (1 <<10),     /* FIN was written to network */
-        STREAM_RST_SENT     = (1 <<11),     /* RST_STREAM was written to network */
-        STREAM_WANT_FLUSH   = (1 <<12),     /* Flush until sm_flush_to is hit */
-        STREAM_FIN_REACHED  = (1 <<13),     /* User read data up to FIN */
-        STREAM_FINISHED     = (1 <<14),     /* Stream is finished */
-        STREAM_ONCLOSE_DONE = (1 <<15),     /* on_close has been called */
-        STREAM_CALL_ONCLOSE = (1 <<16),
-        STREAM_FREE_STREAM  = (1 <<17),
-        STREAM_USE_HEADERS  = (1 <<18),
-        STREAM_HEADERS_SENT = (1 <<19),
-        STREAM_HAVE_UH      = (1 <<20),     /* Have uncompressed headers */
-        STREAM_CONN_LIMITED = (1 <<21),
-        STREAM_HEAD_IN_FIN  = (1 <<22),     /* Incoming headers has FIN bit set */
-        STREAM_ABORT_CONN   = (1 <<23),     /* Unrecoverable error occurred */
-        STREAM_FRAMES_ELIDED= (1 <<24),
-        STREAM_FORCE_FINISH = (1 <<25),     /* Replaces FIN sent and received */
-        STREAM_ONNEW_DONE   = (1 <<26),     /* on_new_stream has been called */
-        STREAM_AUTOSWITCH   = (1 <<27),
-        STREAM_RW_ONCE      = (1 <<28),     /* When set, read/write events are dispatched once per call */
-    }                               stream_flags;
+    SIT_BIDI_CLIENT,
+    SIT_BIDI_SERVER,
+    SIT_UNI_CLIENT,
+    SIT_UNI_SERVER,
+    N_SITS
+};
+
+#define SIT_MASK (N_SITS - 1)
+
+#define SIT_SHIFT 2
+#define SD_SHIFT 1
+
+enum stream_dir { SD_BIDI, SD_UNI, N_SDS };
+
+struct stream_hq_frame
+{
+    /* At which point in the stream (sm_payload) to insert the HQ frame. */
+    uint64_t            shf_off;
+    union {
+        /* Points to the frame if SHF_FIXED_SIZE is not set */
+        unsigned char  *frame_ptr;
+        /* If SHF_FIXED_SIZE is set, the size of the frame to follow.
+         * Non-fixed frame size gets calculated using sm_payload when they
+         * are closed.
+         */
+        size_t          frame_size;
+    }                   shf_u;
+#define shf_frame_ptr shf_u.frame_ptr
+#define shf_frame_size shf_u.frame_size
+    enum hq_frame_type  shf_frame_type:8;
+    enum shf_flags {
+        SHF_TWO_BYTES   = 1 << 0,   /* Use two byte to encode frame length */
+        SHF_FIXED_SIZE  = 1 << 1,   /* Payload size guaranteed */
+        SHF_ACTIVE      = 1 << 2,
+        SHF_WRITTEN     = 1 << 3,   /* Framing bytes have been packetized */
+        SHF_CC_PAID     = 1 << 4,   /* Paid connection cap */
+    }                   shf_flags:8;
+};
+
+struct hq_filter
+{
+    struct varint_read_state    hqfi_vint_state;
+    unsigned                    hqfi_seqno;
+    /* No need to copy the value: use it directly */
+#define hqfi_left hqfi_vint_state.val
+    enum hq_frame_type          hqfi_type:8;
+    enum {
+        HQFI_FLAG_GOT_HEADERS   = 1 << 0,
+        HQFI_FLAG_ERROR         = 1 << 1,
+        HQFI_FLAG_BEGIN         = 1 << 2,
+        HQFI_FLAG_BLOCKED       = 1 << 3,
+    }                           hqfi_flags:8;
+    enum {
+        HQFI_STATE_READING_SIZE_BEGIN,
+        HQFI_STATE_READING_SIZE_CONTINUE,
+        HQFI_STATE_READING_TYPE,
+        HQFI_STATE_READING_PAYLOAD,
+    }                           hqfi_state:8;
+};
+
+struct stream_filter_if
+{
+    int         (*sfi_readable)(struct lsquic_stream *);
+    size_t      (*sfi_filter_df)(struct lsquic_stream *, struct data_frame *);
+    void        (*sfi_decr_left)(struct lsquic_stream *, size_t);
+};
+
+/* These flags indicate which queues -- or other entities -- currently
+ * reference the stream.
+ */
+enum stream_q_flags
+{
+    /* read_streams: */
+    SMQF_WANT_READ    = 1 << 0,
+
+    /* write_streams: */
+#define SMQF_WRITE_Q_FLAGS (SMQF_WANT_FLUSH|SMQF_WANT_WRITE)
+    SMQF_WANT_WRITE   = 1 << 1,
+    SMQF_WANT_FLUSH   = 1 << 2,     /* Flush until sm_flush_to is hit */
 
     /* There are more than one reason that a stream may be put onto
      * connections's sending_streams queue.  Note that writing STREAM
      * frames is done separately.
      */
-    #define STREAM_SENDING_FLAGS (STREAM_SEND_WUF| \
-                                          STREAM_SEND_RST|STREAM_SEND_BLOCKED)
+#define SMQF_SENDING_FLAGS (SMQF_SEND_WUF|SMQF_SEND_RST|SMQF_SEND_BLOCKED)
+    /* sending_streams: */
+    SMQF_SEND_WUF     = 1 << 3,     /* WUF: Window Update Frame */
+    SMQF_SEND_BLOCKED = 1 << 4,
+    SMQF_SEND_RST     = 1 << 5,     /* Error: want to send RST_STREAM */
 
-    #define STREAM_WRITE_Q_FLAGS (STREAM_WANT_FLUSH|STREAM_WANT_WRITE)
-
-    /* Any of these flags will cause user-facing read and write and
-     * shutdown calls to return an error.  They also make the stream
-     * both readable and writeable, as we want the user to collect
-     * the error.
+    /* The equivalent of WINDOW_UPDATE frame for streams in IETF QUIC is
+     * the MAX_STREAM_DATA frame.  Define an alias for use in the IETF
+     * QUIC code:
      */
-    #define STREAM_RST_FLAGS (STREAM_RST_RECVD|STREAM_RST_SENT|\
-                                                        STREAM_SEND_RST)
+#define SMQF_SEND_MAX_STREAM_DATA SMQF_SEND_WUF
 
-    #define STREAM_SERVICE_FLAGS (STREAM_CALL_ONCLOSE|STREAM_FREE_STREAM|\
-                                                            STREAM_ABORT_CONN)
+#define SMQF_SERVICE_FLAGS (SMQF_CALL_ONCLOSE|SMQF_FREE_STREAM|SMQF_ABORT_CONN)
+    SMQF_CALL_ONCLOSE = 1 << 6,
+    SMQF_FREE_STREAM  = 1 << 7,
+    SMQF_ABORT_CONN   = 1 << 8,     /* Unrecoverable error occurred */
+
+    SMQF_QPACK_DEC    = 1 << 9,     /* QPACK decoder is holding a reference to this stream */
+
+    SMQF_H3_PRIO      = 1 <<10,     /* Referenced from HTTP/3 priority tree */
+};
+
+enum stream_flags {
+    STREAM_FIN_RECVD    = 1 << 0,   /* Received STREAM frame with FIN bit set */
+    STREAM_RST_RECVD    = 1 << 1,   /* Received RST frame */
+    STREAM_LAST_WRITE_OK= 1 << 2,   /* Used to break out of write event dispatch loop */
+    STREAM_U_READ_DONE  = 1 << 3,   /* User is done reading (shutdown was called) */
+    STREAM_U_WRITE_DONE = 1 << 4,   /* User is done writing (shutdown was called) */
+    STREAM_FIN_SENT     = 1 << 5,   /* FIN was written to network */
+    STREAM_RST_SENT     = 1 << 6,   /* RST_STREAM was written to network */
+    STREAM_FIN_REACHED  = 1 << 7,   /* User read data up to FIN */
+    STREAM_FINISHED     = 1 << 8,   /* Stream is finished */
+    STREAM_ONCLOSE_DONE = 1 << 9,   /* on_close has been called */
+    STREAM_USE_HEADERS  = 1 << 10,
+    STREAM_HEADERS_SENT = 1 << 11,
+    STREAM_HAVE_UH      = 1 << 12,  /* Have uncompressed headers */
+    STREAM_CONN_LIMITED = 1 << 13,
+    STREAM_HEAD_IN_FIN  = 1 << 14,  /* Incoming headers has FIN bit set */
+    STREAM_FRAMES_ELIDED= 1 << 15,
+    STREAM_FORCE_FINISH = 1 << 16,  /* Replaces FIN sent and received */
+    STREAM_ONNEW_DONE   = 1 << 17,  /* on_new_stream has been called */
+    STREAM_AUTOSWITCH   = 1 << 18,
+    STREAM_RW_ONCE      = 1 << 19,  /* When set, read/write events are dispatched once per call */
+    STREAM_IETF         = 1 << 20,
+    STREAM_CRYPTO       = 1 << 21,
+    STREAM_RST_ACKED    = 1 << 22,  /* Packet containing RST has been acked */
+    STREAM_BLOCKED_SENT = 1 << 23,  /* Stays set once a STREAM_BLOCKED frame is sent */
+    STREAM_RST_READ     = 1 << 24,  /* User code collected the error */
+    STREAM_DATA_RECVD   = 1 << 25,  /* Cache stream state calculation */
+    STREAM_CRITICAL     = 1 << 26,  /* This is a critical stream */
+};
+
+struct lsquic_stream
+{
+    struct lsquic_hash_elem         sm_hash_el;
+    lsquic_stream_id_t              id;
+    enum stream_flags               stream_flags;
+    enum stream_q_flags             sm_qflags;
+    unsigned                        n_unacked;
+    unsigned                        sm_h3_prio_idx;
+    uint32_t                        error_code;
 
     const struct lsquic_stream_if  *stream_if;
     struct lsquic_stream_ctx       *st_ctx;
@@ -91,9 +203,10 @@ struct lsquic_stream
                                         next_write_stream, next_service_stream,
                                         next_prio_stream;
 
-    uint32_t                        error_code;
     uint64_t                        tosend_off;
+    uint64_t                        sm_payload;     /* Not counting HQ frames */
     uint64_t                        max_send_off;
+    uint64_t                        sm_last_recv_off;
 
     /* From the network, we get frames, which we keep on a list ordered
      * by offset.
@@ -102,7 +215,12 @@ struct lsquic_stream
     uint64_t                        read_offset;
     lsquic_sfcw_t                   fc;
 
-    /** If @ref STREAM_WANT_FLUSH is set, flush until this offset. */
+    /* Ring buffer.  Next entry indexed by sm_next_hq_frame. */
+    struct stream_hq_frame          sm_hq_frames[2];
+
+    struct hq_filter                sm_hq_filter;
+
+    /** If @ref SMQF_WANT_FLUSH is set, flush until this offset. */
     uint64_t                        sm_flush_to;
 
     /* Last offset sent in BLOCKED frame */
@@ -114,10 +232,40 @@ struct lsquic_stream
     unsigned char                  *sm_buf;
     void                           *sm_onnew_arg;
 
-    unsigned                        n_unacked;
+    unsigned char                  *sm_header_block;
+    uint64_t                        sm_hb_compl;
+
+    /* Valid if STREAM_FIN_RECVD is set: */
+    uint64_t                        sm_fin_off;
+
+    /* A stream may be generating STREAM or CRYPTO frames */
+    size_t                        (*sm_frame_header_sz)(
+                                        const struct lsquic_stream *, unsigned);
+    enum swtp_status              (*sm_write_to_packet)(struct frame_gen_ctx *,
+                                                const size_t);
+    size_t                        (*sm_write_avail)(struct lsquic_stream *);
+    int                           (*sm_readable)(struct lsquic_stream *);
+
+    /* This element is optional */
+    const struct stream_filter_if  *sm_sfi;
+
+    /* How much data there is in sm_header_block and how much of it has been
+     * sent:
+     */
+    unsigned                        sm_hblock_sz,
+                                    sm_hblock_off;
+
     unsigned short                  sm_n_buffered;  /* Amount of data in sm_buf */
 
     unsigned char                   sm_priority;  /* 0: high; 255: low */
+    unsigned char                   sm_enc_level;
+    unsigned char                   sm_next_hq_frame;   /* Valid values 0 and 1 */
+    enum {
+        SSHS_BEGIN,         /* Nothing has happened yet */
+        SSHS_ENC_SENDING,   /* Sending encoder stream data */
+        SSHS_HBLOCK_SENDING,/* Sending header block data */
+    }                               sm_send_headers_state:8;
+
 #if LSQUIC_KEEP_STREAM_HISTORY
     sm_hist_idx_t                   sm_hist_idx;
 #endif
@@ -139,17 +287,22 @@ enum stream_ctor_flags
                                    * performance.
                                    */
     SCF_DISP_RW_ONCE  = (1 << 3),
+    SCF_IETF          = (1 << 4),
+    SCF_HTTP          = (1 << 5),
+    SCF_CRITICAL      = (1 << 6), /* Critical stream */
 };
 
 lsquic_stream_t *
-lsquic_stream_new_ext (uint32_t id, struct lsquic_conn_public *conn_pub,
-                       const struct lsquic_stream_if *, void *stream_if_ctx,
-                       unsigned initial_sfrw, unsigned initial_send_off,
-                       enum stream_ctor_flags);
+lsquic_stream_new (lsquic_stream_id_t id, struct lsquic_conn_public *,
+                   const struct lsquic_stream_if *, void *stream_if_ctx,
+                   unsigned initial_sfrw, unsigned initial_send_off,
+                   enum stream_ctor_flags);
 
-#define lsquic_stream_new(id, pub, sm_if, sm_if_ctx, cfcw, send_off)        \
-        lsquic_stream_new_ext(id, pub, sm_if, sm_if_ctx, cfcw, send_off,    \
-                              (SCF_CALL_ON_NEW|SCF_DI_AUTOSWITCH))
+struct lsquic_stream *
+lsquic_stream_new_crypto (enum enc_level,
+        struct lsquic_conn_public *conn_pub,
+        const struct lsquic_stream_if *stream_if, void *stream_if_ctx,
+        enum stream_ctor_flags ctor_flags);
 
 void
 lsquic_stream_call_on_new (lsquic_stream_t *);
@@ -157,8 +310,14 @@ lsquic_stream_call_on_new (lsquic_stream_t *);
 void
 lsquic_stream_destroy (lsquic_stream_t *);
 
+/* Any of these flags will cause user-facing read and write and
+ * shutdown calls to return an error.  They also make the stream
+ * both readable and writeable, as we want the user to collect
+ * the error.
+ */
 #define lsquic_stream_is_reset(stream) \
-    (!!((stream)->stream_flags & STREAM_RST_FLAGS))
+    (((stream)->stream_flags & (STREAM_RST_RECVD|STREAM_RST_SENT)) \
+        || ((stream)->sm_qflags & SMQF_SEND_RST))
 
 /* Data that from the network gets inserted into the stream using
  * lsquic_stream_frame_in() function.  Returns 0 on success, -1 on
@@ -186,6 +345,9 @@ lsquic_stream_push_req (lsquic_stream_t *,
 int
 lsquic_stream_rst_in (lsquic_stream_t *, uint64_t offset, uint32_t error_code);
 
+void
+lsquic_stream_stop_sending_in (struct lsquic_stream *, uint16_t error_code);
+
 ssize_t
 lsquic_stream_read (lsquic_stream_t *stream, void *buf, size_t len);
 
@@ -209,11 +371,14 @@ lsquic_stream_window_update (lsquic_stream_t *stream, uint64_t offset);
 int
 lsquic_stream_set_max_send_off (lsquic_stream_t *stream, unsigned offset);
 
-/* The caller should only call this function if STREAM_SEND_WUF is set and
+/* The caller should only call this function if SMQF_SEND_WUF is set and
  * it must generate a window update frame using this value.
  */
 uint64_t
 lsquic_stream_fc_recv_off (lsquic_stream_t *stream);
+
+void
+lsquic_stream_peer_blocked (struct lsquic_stream *, uint64_t);
 
 void
 lsquic_stream_dispatch_read_events (lsquic_stream_t *);
@@ -246,7 +411,7 @@ void
 lsquic_stream_received_goaway (lsquic_stream_t *);
 
 void
-lsquic_stream_acked (lsquic_stream_t *);
+lsquic_stream_acked (struct lsquic_stream *, enum quic_ft_bit);
 
 #define lsquic_stream_is_closed(s)                                          \
     (((s)->stream_flags & (STREAM_U_READ_DONE|STREAM_U_WRITE_DONE))         \
@@ -257,45 +422,79 @@ lsquic_stream_update_sfcw (lsquic_stream_t *, uint64_t max_off);
 int
 lsquic_stream_set_priority_internal (lsquic_stream_t *, unsigned priority);
 
-/* The following flags are checked to see whether progress was made: */
-#define STREAM_RW_PROG_FLAGS (                                              \
-    STREAM_U_READ_DONE  /* User closed read side of the stream */           \
-   |STREAM_FIN_REACHED  /* User reached FIN.  We check this because it */   \
-                        /*   may have been a result of zero-byte read. */   \
-)
+int
+lsquic_stream_id_is_critical (int use_http, lsquic_stream_id_t);
 
-/* Stream progress status is used to judge whether a connection made progress
- * during Pending RW Queue processing.  We only check for stream read progress,
- * as the write progress is defined as any new data packetized for sending.
- */
-struct stream_read_prog_status
-{
-    uint64_t                srps_read_offset;
-    enum stream_flags       srps_flags;
-};
-
-#define lsquic_stream_is_critical(stream) (                                 \
-    (stream)->id == LSQUIC_STREAM_HANDSHAKE ||                              \
-    ((stream)->id == LSQUIC_STREAM_HEADERS &&                               \
-        (stream)->stream_flags & STREAM_USE_HEADERS))
+int
+lsquic_stream_is_critical (const struct lsquic_stream *);
 
 size_t
 lsquic_stream_mem_used (const struct lsquic_stream *);
 
-lsquic_cid_t
+const lsquic_cid_t *
 lsquic_stream_cid (const struct lsquic_stream *);
 
 #define lsquic_stream_has_data_to_flush(stream) ((stream)->sm_n_buffered > 0)
 
 int
-lsquic_stream_readable (const lsquic_stream_t *);
+lsquic_stream_readable (struct lsquic_stream *);
 
 size_t
-lsquic_stream_write_avail (const struct lsquic_stream *);
+lsquic_stream_write_avail (struct lsquic_stream *);
 
 #ifndef NDEBUG
 size_t
-lsquic_stream_flush_threshold (const struct lsquic_stream *);
+lsquic_stream_flush_threshold (const struct lsquic_stream *, unsigned);
 #endif
+
+#define crypto_level(stream) (~0ULL - (stream)->id)
+
+void
+lsquic_stream_set_stream_if (struct lsquic_stream *,
+                   const struct lsquic_stream_if *, void *stream_if_ctx);
+
+struct qpack_dec_hdl *
+lsquic_stream_get_qdh (const struct lsquic_stream *);
+
+uint64_t
+lsquic_stream_combined_send_off (const struct lsquic_stream *);
+
+/* [draft-ietf-quic-transport-16] Section 3.1 */
+enum stream_state_sending
+{
+    SSS_READY,
+    SSS_SEND,
+    SSS_DATA_SENT,
+    SSS_RESET_SENT,
+    SSS_DATA_RECVD,
+    SSS_RESET_RECVD,
+};
+
+extern const char *const lsquic_sss2str[];
+
+enum stream_state_sending
+lsquic_stream_sending_state (const struct lsquic_stream *);
+
+/* [draft-ietf-quic-transport-16] Section 3.2 */
+enum stream_state_receiving
+{
+    SSR_RECV,
+    SSR_SIZE_KNOWN,
+    SSR_DATA_RECVD,
+    SSR_RESET_RECVD,
+    SSR_DATA_READ,
+    SSR_RESET_READ,
+};
+
+extern const char *const lsquic_ssr2str[];
+
+enum stream_state_receiving
+lsquic_stream_receiving_state (struct lsquic_stream *);
+
+uint64_t
+lsquic_stream_fc_recv_off_const (const struct lsquic_stream *);
+
+void
+lsquic_stream_max_stream_data_sent (struct lsquic_stream *);
 
 #endif

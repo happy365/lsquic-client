@@ -15,7 +15,9 @@
 #endif
 
 #include "lsquic_types.h"
+#include "lsquic_int_types.h"
 #include "lsquic_packet_common.h"
+#include "lsquic_packet_gquic.h"
 #include "lsquic_packet_in.h"
 #include "lsquic_packet_out.h"
 #include "lsquic_parse.h"
@@ -24,12 +26,11 @@
 #include "lsquic.h"
 #include "lsquic_parse_gquic_be.h"
 #include "lsquic_byteswap.h"
+#include "lsquic_hash.h"
 #include "lsquic_conn.h"
 
 #define LSQUIC_LOGGER_MODULE LSQLM_PARSE
 #include "lsquic_logger.h"
-
-
 
 
 static int
@@ -38,11 +39,11 @@ gen_short_pkt_header (const struct lsquic_conn *lconn,
                                                                 size_t bufsz)
 {
     unsigned packno_len, need;
-    enum lsquic_packno_bits bits;
+    enum packno_bits bits;
     uint32_t packno;
 
     bits = (packet_out->po_flags >> POBIT_SHIFT) & 0x3;
-    packno_len = packno_bits2len(bits);
+    packno_len = gquic_packno_bits2len(bits);
 
     need = 1 + 8 /* CID */ + packno_len;
 
@@ -51,7 +52,7 @@ gen_short_pkt_header (const struct lsquic_conn *lconn,
 
     *buf++ = 0x30 | bits;
 
-    memcpy(buf, &lconn->cn_cid, 8);
+    memcpy(buf, lconn->cn_cid.idbuf, 8);
     buf += 8;
 
     packno = packet_out->po_packno;
@@ -106,7 +107,7 @@ gen_long_pkt_header (const struct lsquic_conn *lconn,
 
     *p++ = 0x50;
 
-    memcpy(p, &lconn->cn_cid, 8);
+    memcpy(p, lconn->cn_cid.idbuf, 8);
     p += 8;
 
     packno = packet_out->po_packno;
@@ -138,13 +139,13 @@ static size_t
 gquic_Q044_packout_header_size_short (const struct lsquic_conn *lconn,
                                             enum packet_out_flags flags)
 {
-    enum lsquic_packno_bits bits;
+    enum packno_bits bits;
     size_t sz;
 
     bits = (flags >> POBIT_SHIFT) & 0x3;
     sz = 1; /* Type */
     sz += 8; /* CID */
-    sz += packno_bits2len(bits);
+    sz += gquic_packno_bits2len(bits);
 
     return sz;
 }
@@ -173,16 +174,23 @@ gquic_Q044_packout_size (const struct lsquic_conn *lconn,
         sz = gquic_Q044_packout_header_size_long(lconn, packet_out->po_flags);
 
     sz += packet_out->po_data_sz;
-    sz += QUIC_PACKET_HASH_SZ;
+    sz += GQUIC_PACKET_HASH_SZ;
 
     return sz;
+}
+
+
+static void
+gquic_Q044_parse_packet_in_finish (lsquic_packet_in_t *packet_in,
+                                            struct packin_parse_state *state)
+{
 }
 
 
 const struct parse_funcs lsquic_parse_funcs_gquic_Q044 =
 {
     .pf_gen_reg_pkt_header            =  gquic_Q044_gen_reg_pkt_header,
-    .pf_parse_packet_in_finish        =  gquic_be_parse_packet_in_finish,
+    .pf_parse_packet_in_finish        =  gquic_Q044_parse_packet_in_finish,
     .pf_gen_stream_frame              =  gquic_be_gen_stream_frame,
     .pf_calc_stream_frame_header_sz   =  calc_stream_frame_header_sz_gquic,
     .pf_parse_stream_frame            =  gquic_be_parse_stream_frame,
@@ -209,5 +217,7 @@ const struct parse_funcs lsquic_parse_funcs_gquic_Q044 =
     .pf_parse_frame_type              =  parse_frame_type_gquic_Q035_thru_Q039,
     .pf_turn_on_fin                   =  lsquic_turn_on_fin_Q035_thru_Q039,
     .pf_packout_size                  =  gquic_Q044_packout_size,
-    .pf_packout_header_size           =  gquic_Q044_packout_header_size,
+    .pf_packout_max_header_size           =  gquic_Q044_packout_header_size,
+    .pf_calc_packno_bits              =  lsquic_gquic_calc_packno_bits,
+    .pf_packno_bits2len               =  lsquic_gquic_packno_bits2len,
 };

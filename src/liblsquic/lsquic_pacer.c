@@ -14,11 +14,12 @@
 #include "lsquic_int_types.h"
 #include "lsquic_pacer.h"
 #include "lsquic_packet_common.h"
+#include "lsquic_packet_gquic.h"
 #include "lsquic_packet_out.h"
 #include "lsquic_util.h"
 
 #define LSQUIC_LOGGER_MODULE LSQLM_PACER
-#define LSQUIC_LOG_CONN_ID pacer->pa_cid
+#define LSQUIC_LOG_CONN_ID lsquic_conn_log_cid(pacer->pa_conn)
 #include "lsquic_logger.h"
 
 #ifndef MAX
@@ -27,11 +28,12 @@
 
 
 void
-pacer_init (struct pacer *pacer, lsquic_cid_t cid, unsigned max_intertick)
+pacer_init (struct pacer *pacer, const struct lsquic_conn *conn,
+                                                unsigned max_intertick)
 {
     memset(pacer, 0, sizeof(*pacer));
     pacer->pa_burst_tokens = 10;
-    pacer->pa_cid = cid;
+    pacer->pa_conn = conn;
     pacer->pa_max_intertick = max_intertick;
 #ifndef NDEBUG
     const char *val;
