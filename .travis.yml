@@ -24,7 +24,6 @@ before_install:
 before_script:
   - git clone https://boringssl.googlesource.com/boringssl
   - cd boringssl
-  - git checkout chromium-stable
   - cmake .
   - make -j$(nproc)
   - BORINGSSL_SOURCE=$PWD
