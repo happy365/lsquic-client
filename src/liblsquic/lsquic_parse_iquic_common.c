@@ -91,7 +91,7 @@ lsquic_Q044_parse_packet_in_long_begin (struct lsquic_packet_in *packet_in,
      * array in a version negotiation packet.  This is because the sizes of
      * the packet number field and the version tag are the same.
      */
-    if (end - p < cid_len + packet_len)
+    if (end - p < (ptrdiff_t) (cid_len + packet_len))
         return -1;
 
     memcpy(&packet_in->pi_dcid.idbuf, p, cid_len);
@@ -148,7 +148,7 @@ lsquic_Q044_parse_packet_in_short_begin (lsquic_packet_in_t *packet_in,
 
     header_len = 1 + packet_len;
 
-    if (pend - p < header_len)
+    if (pend - p < (ptrdiff_t) header_len)
         return -1;
 
     ++p;

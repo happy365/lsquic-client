@@ -74,7 +74,7 @@ static int
 setup_handshake_keys (struct enc_sess_iquic *, const lsquic_cid_t *);
 
 
-typedef int (*gen_hp_mask_f)(struct enc_sess_iquic *,
+typedef void (*gen_hp_mask_f)(struct enc_sess_iquic *,
     const struct crypto_ctx *, const struct crypto_ctx_pair *,
     const unsigned char *sample, unsigned char mask[16]);
 
@@ -173,34 +173,31 @@ struct enc_sess_iquic
 };
 
 
-static int
+static void
 gen_hp_mask_aes (struct enc_sess_iquic *enc_sess,
         const struct crypto_ctx *crypto_ctx, const struct crypto_ctx_pair *pair,
         const unsigned char *sample, unsigned char mask[EVP_MAX_BLOCK_LENGTH])
 {
     EVP_CIPHER_CTX hp_ctx;
-    int out_len, retval;
+    int out_len;
 
     EVP_CIPHER_CTX_init(&hp_ctx);
-    if (EVP_EncryptInit_ex(&hp_ctx, pair->ykp_hp, NULL,
+    if (!(EVP_EncryptInit_ex(&hp_ctx, pair->ykp_hp, NULL,
                                 crypto_ctx->yk_hp_buf, 0)
-        && EVP_EncryptUpdate(&hp_ctx, mask, &out_len, sample, 16))
-    {
-        retval = 0;
-    }
-    else
+        && EVP_EncryptUpdate(&hp_ctx, mask, &out_len, sample, 16)))
     {
         LSQ_WARN("cannot generate hp mask, error code: %"PRIu32,
                                                             ERR_get_error());
-        retval = -1;
+        enc_sess->esi_conn->cn_if->ci_internal_error(enc_sess->esi_conn,
+            "cannot generate hp mask, error code: %"PRIu32, ERR_get_error());
     }
+    assert(out_len >= 5);
 
     (void) EVP_CIPHER_CTX_cleanup(&hp_ctx);
-    return retval;
 }
 
 
-static int
+static void
 gen_hp_mask_chacha20 (struct enc_sess_iquic *enc_sess,
         const struct crypto_ctx *crypto_ctx, const struct crypto_ctx_pair *pair,
         const unsigned char *sample, unsigned char mask[EVP_MAX_BLOCK_LENGTH])
@@ -216,7 +213,6 @@ gen_hp_mask_chacha20 (struct enc_sess_iquic *enc_sess,
     nonce = sample + sizeof(counter);
     CRYPTO_chacha_20(mask, (unsigned char [5]) { 0, 0, 0, 0, 0, }, 5,
                                         crypto_ctx->yk_hp_buf, nonce, counter);
-    return 0;
 }
 
 
@@ -228,26 +224,24 @@ apply_hp (struct enc_sess_iquic *enc_sess,
     unsigned char mask[EVP_MAX_BLOCK_LENGTH];
     char mask_str[5 * 2 + 1];
 
-    if (0 == pair->ykp_gen_hp_mask(enc_sess, crypto_ctx, pair,
-                                                    dst + packno_off + 4, mask))
+    pair->ykp_gen_hp_mask(enc_sess, crypto_ctx, pair,
+                                                dst + packno_off + 4, mask);
+    LSQ_DEBUG("apply header protection using mask %s",
+                                                HEXSTR(mask, 5, mask_str));
+    dst[0] ^= (0xF | (((dst[0] & 0x80) == 0) << 4)) & mask[0];
+    switch (packno_len)
     {
-        LSQ_DEBUG("apply header protection using mask %s",
-                                                    HEXSTR(mask, 5, mask_str));
-        dst[0] ^= (0xF | (((dst[0] & 0x80) == 0) << 4)) & mask[0];
-        switch (packno_len)
-        {
-        case 4:
-            dst[packno_off + 3] ^= mask[4];
-            /* fall-through */
-        case 3:
-            dst[packno_off + 2] ^= mask[3];
-            /* fall-through */
-        case 2:
-            dst[packno_off + 1] ^= mask[2];
-            /* fall-through */
-        default:
-            dst[packno_off + 0] ^= mask[1];
-        }
+    case 4:
+        dst[packno_off + 3] ^= mask[4];
+        /* fall-through */
+    case 3:
+        dst[packno_off + 2] ^= mask[3];
+        /* fall-through */
+    case 2:
+        dst[packno_off + 1] ^= mask[2];
+        /* fall-through */
+    default:
+        dst[packno_off + 0] ^= mask[1];
     }
 }
 
@@ -289,41 +283,37 @@ strip_hp (struct enc_sess_iquic *enc_sess,
     unsigned char mask[EVP_MAX_BLOCK_LENGTH];
     char mask_str[5 * 2 + 1];
 
-    if (0 == pair->ykp_gen_hp_mask(enc_sess, crypto_ctx, pair, iv, mask))
+    pair->ykp_gen_hp_mask(enc_sess, crypto_ctx, pair, iv, mask);
+    LSQ_DEBUG("strip header protection using mask %s",
+                                                HEXSTR(mask, 5, mask_str));
+    dst[0] ^= (0xF | (((dst[0] & 0x80) == 0) << 4)) & mask[0];
+    packno = 0;
+    shift = 0;
+    *packno_len = 1 + (dst[0] & 3);
+    switch (*packno_len)
     {
-        LSQ_DEBUG("strip header protection using mask %s",
-                                                    HEXSTR(mask, 5, mask_str));
-        dst[0] ^= (0xF | (((dst[0] & 0x80) == 0) << 4)) & mask[0];
-        packno = 0;
-        shift = 0;
-        *packno_len = 1 + (dst[0] & 3);
-        switch (*packno_len)
-        {
-        case 4:
-            dst[packno_off + 3] ^= mask[4];
-            packno |= dst[packno_off + 3];
-            shift += 8;
-            /* fall-through */
-        case 3:
-            dst[packno_off + 2] ^= mask[3];
-            packno |= dst[packno_off + 2] << shift;
-            shift += 8;
-            /* fall-through */
-        case 2:
-            dst[packno_off + 1] ^= mask[2];
-            packno |= dst[packno_off + 1] << shift;
-            shift += 8;
-            /* fall-through */
-        default:
-            dst[packno_off + 0] ^= mask[1];
-            packno |= dst[packno_off + 0] << shift;
-            shift += 8;
-        }
-        pns = lsquic_enclev2pns[pair->ykp_enc_level];
-        return decode_packno(enc_sess->esi_max_packno[pns], packno, shift);
+    case 4:
+        dst[packno_off + 3] ^= mask[4];
+        packno |= dst[packno_off + 3];
+        shift += 8;
+        /* fall-through */
+    case 3:
+        dst[packno_off + 2] ^= mask[3];
+        packno |= dst[packno_off + 2] << shift;
+        shift += 8;
+        /* fall-through */
+    case 2:
+        dst[packno_off + 1] ^= mask[2];
+        packno |= dst[packno_off + 1] << shift;
+        shift += 8;
+        /* fall-through */
+    default:
+        dst[packno_off + 0] ^= mask[1];
+        packno |= dst[packno_off + 0] << shift;
+        shift += 8;
     }
-    else
-        return IQUIC_INVALID_PACKNO;
+    pns = lsquic_enclev2pns[pair->ykp_enc_level];
+    return decode_packno(enc_sess->esi_max_packno[pns], packno, shift);
 }
 
 

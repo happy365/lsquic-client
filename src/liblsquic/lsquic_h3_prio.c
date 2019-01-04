@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <sys/queue.h>
+#include <sys/types.h>
 
 #include "lsquic_types.h"
 #include "lsquic_int_types.h"

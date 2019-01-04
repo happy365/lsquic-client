@@ -2943,7 +2943,7 @@ test_hq_framing (int sched_immed, int dispatch_once, unsigned wsize)
     {   /* Remove framing and verify contents */
         const unsigned char *src;
         unsigned char *dst;
-        size_t sz;
+        uint64_t sz;
         int s;
 
         src = buf_out;

@@ -85,7 +85,7 @@ lsquic_frab_list_write (struct frab_list *fral, const void *buf, size_t bufsz)
             TAILQ_INSERT_TAIL(&fral->fl_frabs, frab, frab_next);
             ntowrite = frab_left_to_write(frab);
         }
-        if (ntowrite > end - p)
+        if ((ptrdiff_t) ntowrite > end - p)
             ntowrite = end - p;
         memcpy(frab_write_to(frab), p, ntowrite);
         p += ntowrite;

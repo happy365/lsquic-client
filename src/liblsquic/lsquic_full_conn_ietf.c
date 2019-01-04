@@ -3728,6 +3728,16 @@ ietf_full_conn_ci_make_stream (struct lsquic_conn *lconn)
 }
 
 
+static void
+ietf_full_conn_ci_internal_error (struct lsquic_conn *lconn,
+                                                    const char *format, ...)
+{
+    struct ietf_full_conn *const conn = (struct ietf_full_conn *) lconn;
+    LSQ_INFO("internal error reported");
+    ABORT_QUIETLY(TEC_INTERNAL_ERROR, "Internal error");
+}
+
+
 static const struct conn_iface ietf_full_conn_iface = {
     .ci_client_call_on_new   =  ietf_full_conn_ci_client_call_on_new,
     .ci_close                =  ietf_full_conn_ci_close,
@@ -3737,6 +3747,7 @@ static const struct conn_iface ietf_full_conn_iface = {
     .ci_get_stream_by_id     =  NULL,   /* TODO */
     .ci_handshake_failed     =  ietf_full_conn_ci_handshake_failed,
     .ci_handshake_ok         =  ietf_full_conn_ci_handshake_ok,
+    .ci_internal_error       =  ietf_full_conn_ci_internal_error,
     .ci_is_tickable          =  ietf_full_conn_ci_is_tickable,
     .ci_make_stream          =  ietf_full_conn_ci_make_stream,
     .ci_n_avail_streams      =  ietf_full_conn_ci_n_avail_streams,

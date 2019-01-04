@@ -41,6 +41,7 @@ SET(MY_CMAKE_FLAGS "${MY_CMAKE_FLAGS} -fno-omit-frame-pointer")
 IF(CMAKE_COMPILER_IS_GNUCC AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 4.9.3)
     SET(MY_CMAKE_FLAGS "${MY_CMAKE_FLAGS} -Wno-missing-field-initializers")
 ENDIF()
+
 IF(CMAKE_BUILD_TYPE STREQUAL "Debug")
     SET(MY_CMAKE_FLAGS "${MY_CMAKE_FLAGS} -O0 -g3")
     IF(CMAKE_C_COMPILER MATCHES "clang" AND
@@ -52,7 +53,6 @@ IF(CMAKE_BUILD_TYPE STREQUAL "Debug")
     #SET(LIBS ${LIBS} fiu)
 ELSE()
     SET(MY_CMAKE_FLAGS "${MY_CMAKE_FLAGS} -O3 -g0")
-    SET(MY_CMAKE_FLAGS "${MY_CMAKE_FLAGS} -DNDEBUG")
     # Comment out the following line to compile out debug messages:
     #SET(MY_CMAKE_FLAGS "${MY_CMAKE_FLAGS} -DLSQUIC_LOWEST_LOG_LEVEL=LSQ_LOG_INFO")
 ENDIF()
@@ -80,7 +80,6 @@ IF(CMAKE_BUILD_TYPE STREQUAL "Debug")
     #SET(LIBS ${LIBS} fiu)
 ELSE()
     SET(MY_CMAKE_FLAGS "${MY_CMAKE_FLAGS} -Ox")
-    SET(MY_CMAKE_FLAGS "${MY_CMAKE_FLAGS} -DNDEBUG")
     # Comment out the following line to compile out debug messages:
     #SET(MY_CMAKE_FLAGS "${MY_CMAKE_FLAGS} -DLSQUIC_LOWEST_LOG_LEVEL=LSQ_LOG_INFO")
 ENDIF()
@@ -159,7 +158,7 @@ add_subdirectory(src)
 
 add_subdirectory(test)
 
-IF(NOT (CMAKE_C_FLAGS MATCHES "-DNDEBUG"))
+IF(CMAKE_BUILD_TYPE STREQUAL "Debug")
     # Our test framework relies on assertions, only compile if assertions are
     # enabled.
     #

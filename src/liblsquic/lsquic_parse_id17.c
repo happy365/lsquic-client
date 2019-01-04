@@ -638,6 +638,12 @@ id17_parse_ack_frame (const unsigned char *const buf, size_t buf_len,
         ack->flags |= AI_ECN;
     }
 
+#if LSQUIC_PARSE_ACK_TIMESTAMPS
+#error Pasing ACK timestamps not supported
+#else
+    ack->n_timestamps = 0;
+#endif
+
     return p - buf;
 }
 
@@ -1416,7 +1422,7 @@ lsquic_ID17_parse_packet_in_long_begin (struct lsquic_packet_in *packet_in,
         scil += 3;
     ++p;
 
-    if (end - p < dcil + scil)
+    if (end - p < (ptrdiff_t) (dcil + scil))
         return -1;
 
     if (dcil)

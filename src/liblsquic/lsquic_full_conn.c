@@ -3169,6 +3169,16 @@ full_conn_ci_abort (struct lsquic_conn *lconn)
 
 
 static void
+full_conn_ci_internal_error (struct lsquic_conn *lconn,
+                                                    const char *format, ...)
+{
+    struct full_conn *const conn = (struct full_conn *) lconn;
+    LSQ_INFO("Internal error reported");
+    conn->fc_flags |= FC_ERROR;
+}
+
+
+static void
 full_conn_ci_close (struct lsquic_conn *lconn)
 {
     struct full_conn *conn = (struct full_conn *) lconn;
@@ -3592,6 +3602,7 @@ static const struct conn_iface full_conn_iface = {
     .ci_going_away           =  full_conn_ci_going_away,
     .ci_handshake_failed     =  full_conn_ci_handshake_failed,
     .ci_handshake_ok         =  full_conn_ci_handshake_ok,
+    .ci_internal_error       =  full_conn_ci_internal_error,
     .ci_is_push_enabled      =  full_conn_ci_is_push_enabled,
     .ci_is_tickable          =  full_conn_ci_is_tickable,
     .ci_make_stream          =  full_conn_ci_make_stream,

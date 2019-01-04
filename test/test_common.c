@@ -7,6 +7,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <sys/types.h>
 #if defined(__APPLE__)
 #   define __APPLE_USE_RFC_3542 1
 #endif
@@ -15,7 +16,6 @@
 #include <netinet/ip.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
-#include <sys/types.h>
 #include <unistd.h>
 #else
 #include <Windows.h>
@@ -28,7 +28,6 @@
 #include <sys/stat.h>
 #include <sys/queue.h>
 #include <fcntl.h>
-#include <sys/types.h>
 
 #include "test_config.h"
 #if HAVE_REGEX
@@ -624,7 +623,13 @@ read_handler (evutil_socket_t fd, short flags, void *ctx)
 #endif
                         (struct sockaddr *) &packs_in->local_addresses[n],
                         (struct sockaddr *) &packs_in->peer_addresses[n],
-                        sport, packs_in->ecn[n]))
+                        sport,
+#if ECN_SUPPORTED
+                        packs_in->ecn[n]
+#else
+                        0
+#endif
+                        ))
                 break;
 
         if (n > 0)

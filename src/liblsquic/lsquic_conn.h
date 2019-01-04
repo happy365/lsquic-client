@@ -136,6 +136,13 @@ struct conn_iface
     void
     (*ci_stateless_reset) (struct lsquic_conn *);
 
+    /* Use this to abort the connection when unlikely errors occur */
+    void
+    (*ci_internal_error) (struct lsquic_conn *, const char *format, ...)
+#if __GNUC__
+            __attribute__((format(printf, 2, 3)))
+#endif
+    ;
 };
 
 #define LSCONN_CCE_BITS 3
