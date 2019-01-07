@@ -514,6 +514,7 @@ read_one_packet (struct read_iter *iter)
     packs_in->vecs[iter->ri_idx].len = MAX_PACKET_SZ;
 #endif
 
+  top:
     ctl_buf = packs_in->ctlmsg_data + iter->ri_idx * CTL_SZ;
 
 #ifndef WIN32
@@ -530,6 +531,14 @@ read_one_packet (struct read_iter *iter)
         if (!(EAGAIN == errno || EWOULDBLOCK == errno))
             LSQ_ERROR("recvmsg: %s", strerror(errno));
         return ROP_ERROR;
+    }
+    if (msg.msg_flags & (MSG_TRUNC|MSG_CTRUNC))
+    {
+        if (msg.msg_flags & MSG_TRUNC)
+            LSQ_INFO("packet truncated - drop it");
+        if (msg.msg_flags & MSG_CTRUNC)
+            LSQ_WARN("packet's auxilicary data truncated - drop it");
+        goto top;
     }
 #else
     WSAMSG msg = {

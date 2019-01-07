@@ -158,10 +158,10 @@ struct parse_funcs
         lsquic_stream_id_t *stream_id, uint16_t *error_code);
     int
     (*pf_gen_connect_close_frame) (unsigned char *buf, size_t buf_len,
-                uint32_t error_code, const char *reason, int reason_len);
+        int app_error, unsigned error_code, const char *reason, int reason_len);
     int
     (*pf_parse_connect_close_frame) (const unsigned char *buf, size_t buf_len,
-                uint32_t *error_code, uint16_t *reason_length,
+                int *app_error, unsigned *error_code, uint16_t *reason_length,
                 uint8_t *reason_offset);
     int
     (*pf_gen_goaway_frame) (unsigned char *buf, size_t buf_len,

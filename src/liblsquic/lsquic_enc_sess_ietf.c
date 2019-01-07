@@ -160,10 +160,12 @@ struct enc_sess_iquic
     struct crypto_ctx_pair *
                          esi_crypto_pair[N_ENC_LEVS + 1];
     lsquic_packno_t      esi_max_packno[N_PNS];
+    lsquic_cid_t         esi_odcid;
     enum {
         ESI_INITIALIZED  = 1 << 0,
         ESI_LOG_SECRETS  = 1 << 1,
         ESI_HANDSHAKE_OK = 1 << 2,
+        ESI_ODCID        = 1 << 3,
     }                    esi_flags;
     enum evp_aead_direction_t
                          esi_dir[2];        /* client, server */
@@ -559,9 +561,7 @@ init_client (struct enc_sess_iquic *const enc_sess)
         goto err;
     }
     if (0 != SSL_set_alpn_protos(enc_sess->esi_ssl,
-            (unsigned char []) { 5, 'h', 'q', '-', '1',
-                enc_sess->esi_conn->cn_version == LSQVER_ID17 ? '7' :
-                'x' }, 6))
+            (unsigned char []) { 5, 'h', 'q', '-', '1', '7', }, 6))
     {
         LSQ_ERROR("cannot set ALPN: %s",
             ERR_error_string(ERR_get_error(), errbuf));
@@ -743,6 +743,30 @@ iquic_esfi_get_peer_transport_params (enc_session_t *enc_session_p,
     {
         LSQ_DEBUG("could not parse peer transport parameters");
         return -1;
+    }
+
+    if ((enc_sess->esi_flags & ESI_ODCID) )
+    {
+        if (!(trans_params->tp_flags & TRAPA_ORIGINAL_CID))
+        {
+            LSQ_DEBUG("server did not produce original DCID (ODCID)");
+            return -1;
+        }
+        if (LSQUIC_CIDS_EQ(&enc_sess->esi_odcid,
+                                        &trans_params->tp_original_cid))
+            LSQ_DEBUG("ODCID values match");
+        else
+        {
+            if (LSQ_LOG_ENABLED(LSQ_LOG_DEBUG))
+            {
+                char cidbuf[2][MAX_CID_LEN * 2 + 1];
+                lsquic_cid2str(&enc_sess->esi_odcid, cidbuf[0]);
+                lsquic_cid2str(&trans_params->tp_original_cid, cidbuf[1]);
+                LSQ_DEBUG("server provided ODCID %s that does not match "
+                    "our ODCID %s", cidbuf[1], cidbuf[2]);
+            }
+            return -1;
+        }
     }
 
     return 0;
@@ -1085,6 +1109,8 @@ iquic_esfi_reset_dcid (enc_session_t *enc_session_p, const lsquic_cid_t *dcid)
 {
     struct enc_sess_iquic *const enc_sess = enc_session_p;
 
+    enc_sess->esi_odcid = enc_sess->esi_conn->cn_dcid;
+    enc_sess->esi_flags |= ESI_ODCID;
     enc_sess->esi_conn->cn_dcid = *dcid;
     /* TODO: free previous handshake keys */
     if (0 == setup_handshake_keys(enc_sess, dcid))

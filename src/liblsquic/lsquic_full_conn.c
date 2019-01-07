@@ -1669,7 +1669,7 @@ process_connection_close_frame (struct full_conn *conn, lsquic_packet_in_t *pack
     int parsed_len;
 
     parsed_len = conn->fc_conn.cn_pf->pf_parse_connect_close_frame(p, len,
-                                        &error_code, &reason_len, &reason_off);
+                                NULL, &error_code, &reason_len, &reason_off);
     if (parsed_len < 0)
         return 0;
     EV_LOG_CONNECTION_CLOSE_FRAME_IN(LSQUIC_LOG_CONN_ID, error_code,
@@ -2189,7 +2189,7 @@ generate_connection_close_packet (struct full_conn *conn)
 
     lsquic_send_ctl_scheduled_one(&conn->fc_send_ctl, packet_out);
     int sz = conn->fc_conn.cn_pf->pf_gen_connect_close_frame(packet_out->po_data + packet_out->po_data_sz,
-                     lsquic_packet_out_avail(packet_out), 16 /* PEER_GOING_AWAY */,
+                     lsquic_packet_out_avail(packet_out), 0, 16 /* PEER_GOING_AWAY */,
                      NULL, 0);
     if (sz < 0) {
         ABORT_ERROR("generate_connection_close_packet failed");
@@ -2760,7 +2760,7 @@ immediate_close (struct full_conn *conn)
     lsquic_send_ctl_scheduled_one(&conn->fc_send_ctl, packet_out);
     sz = conn->fc_conn.cn_pf->pf_gen_connect_close_frame(
                      packet_out->po_data + packet_out->po_data_sz,
-                     lsquic_packet_out_avail(packet_out), error_code,
+                     lsquic_packet_out_avail(packet_out), 0, error_code,
                      error_reason, error_reason ? strlen(error_reason) : 0);
     if (sz < 0) {
         LSQ_WARN("%s failed", __func__);

@@ -96,6 +96,7 @@ enum ifull_conn_flags
     IFC_GOAWAY_SENT   = 1 << 19,
     IFC_GOT_PRST      = 1 << 20,
     IFC_IGNORE_INIT   = 1 << 21,
+    IFC_RETRIED       = 1 << 22,
 };
 
 enum send_flags
@@ -134,11 +135,14 @@ enum send_flags
 #define ABORT_WARN(...) \
     ABORT_WITH_FLAG(conn, LSQ_LOG_WARN, IFC_ERROR, __VA_ARGS__)
 
+#define CONN_ERR(app_error_, code_) (struct conn_err) { \
+                            .app_error = (app_error_), .u.err = (code_), }
+
 /* Use this for protocol errors; they do not need to be as loud as our own
  * internal errors.
  */
-#define ABORT_QUIETLY(tec, ...) do {                                        \
-    conn->ifc_tec = (tec);                                                  \
+#define ABORT_QUIETLY(app_error, code, ...) do {                            \
+    conn->ifc_error = CONN_ERR(app_error, code);                            \
     ABORT_WITH_FLAG(conn, LSQ_LOG_INFO, IFC_ERROR, __VA_ARGS__);            \
 } while (0)
 
@@ -178,6 +182,17 @@ struct http_ctl_stream_in
     struct hcsi_reader  reader;
 };
 
+struct conn_err
+{
+    int                         app_error;
+    union
+    {
+        enum trans_error_code   tec;
+        enum http_error_code    hec;
+        unsigned                err;
+    }                           u;
+};
+
 struct ietf_full_conn
 {
     struct lsquic_conn          ifc_conn;
@@ -195,7 +210,7 @@ struct ietf_full_conn
     uint64_t                    ifc_max_stream_data_uni;
     enum ifull_conn_flags       ifc_flags;
     enum send_flags             ifc_send_flags;
-    enum trans_error_code       ifc_tec;
+    struct conn_err             ifc_error;
     unsigned                    ifc_n_delayed_streams;
     unsigned                    ifc_n_cons_unretx;
     const struct lsquic_stream_if
@@ -1429,7 +1444,7 @@ ietf_full_conn_ci_handshake_ok (struct lsquic_conn *lconn)
         {
             ABORT_WARN("cannot create control stream due to peer-imposed "
                                                                     "limit");
-            conn->ifc_tec = TEC_TRANSPORT_PARAMETER_ERROR;
+            conn->ifc_error = CONN_ERR(1, HEC_GENERAL_PROTOCOL_ERROR);
             return;
         }
         if (0 != create_ctl_stream_out(conn))
@@ -1508,7 +1523,7 @@ immediate_close (struct ietf_full_conn *conn)
 {
     struct lsquic_packet_out *packet_out;
     const char *error_reason;
-    enum trans_error_code error_code;
+    struct conn_err conn_err;
     int sz;
 
     if (conn->ifc_flags & (IFC_TICK_CLOSE|IFC_GOT_PRST))
@@ -1535,42 +1550,43 @@ immediate_close (struct ietf_full_conn *conn)
     }
 
     assert(conn->ifc_flags & (IFC_ERROR|IFC_ABORTED|IFC_TIMED_OUT|IFC_HSK_FAILED));
-    if (conn->ifc_tec != TEC_NO_ERROR)
+    if (conn->ifc_error.u.err != 0)
     {
-        error_code = conn->ifc_tec;
+        conn_err = conn->ifc_error;
         error_reason = conn->ifc_errmsg;
     }
     else if (conn->ifc_flags & IFC_ERROR)
     {
-        error_code = TEC_INTERNAL_ERROR;
+        conn_err = CONN_ERR(0, TEC_INTERNAL_ERROR);
         error_reason = "connection error";
     }
     else if (conn->ifc_flags & IFC_ABORTED)
     {
-        error_code = TEC_NO_ERROR;
+        conn_err = CONN_ERR(0, TEC_NO_ERROR);
         error_reason = "user aborted connection";
     }
     else if (conn->ifc_flags & IFC_TIMED_OUT)
     {
-        error_code = TEC_NO_ERROR;
+        conn_err = CONN_ERR(0, TEC_NO_ERROR);
         error_reason = "connection timed out";
     }
     else if (conn->ifc_flags & IFC_HSK_FAILED)
     {
-        error_code = TEC_NO_ERROR;
+        conn_err = CONN_ERR(0, TEC_NO_ERROR);
         error_reason = "handshake failed";
     }
     else
     {
-        error_code = TEC_NO_ERROR;
+        conn_err = CONN_ERR(0, TEC_NO_ERROR);
         error_reason = NULL;
     }
 
     lsquic_send_ctl_scheduled_one(&conn->ifc_send_ctl, packet_out);
     sz = conn->ifc_conn.cn_pf->pf_gen_connect_close_frame(
                      packet_out->po_data + packet_out->po_data_sz,
-                     lsquic_packet_out_avail(packet_out), error_code,
-                     error_reason, error_reason ? strlen(error_reason) : 0);
+                     lsquic_packet_out_avail(packet_out), conn_err.app_error,
+                     conn_err.u.err, error_reason,
+                     error_reason ? strlen(error_reason) : 0);
     if (sz < 0) {
         LSQ_WARN("%s failed", __func__);
         return TICK_CLOSE;
@@ -1720,7 +1736,7 @@ generate_connection_close_packet (struct ietf_full_conn *conn)
     lsquic_send_ctl_scheduled_one(&conn->ifc_send_ctl, packet_out);
     sz = conn->ifc_conn.cn_pf->pf_gen_connect_close_frame(
                 packet_out->po_data + packet_out->po_data_sz,
-                lsquic_packet_out_avail(packet_out), TEC_NO_ERROR, NULL, 0);
+                lsquic_packet_out_avail(packet_out), 0, TEC_NO_ERROR, NULL, 0);
     if (sz < 0) {
         ABORT_ERROR("generate_connection_close_packet failed");
         return;
@@ -2135,7 +2151,7 @@ process_stop_sending_frame (struct ietf_full_conn *conn,
     our_stream = !is_peer_initiated(conn, stream_id);
     if (((stream_id >> SD_SHIFT) == SD_UNI) && !our_stream)
     {
-        ABORT_QUIETLY(TEC_PROTOCOL_VIOLATION, "received STOP_SENDING frame "
+        ABORT_QUIETLY(0, TEC_PROTOCOL_VIOLATION, "received STOP_SENDING frame "
                                                 "for receive-only stream");
         return 0;
     }
@@ -2146,7 +2162,7 @@ process_stop_sending_frame (struct ietf_full_conn *conn,
         if (our_stream &&
                     SSS_READY == (sss = lsquic_stream_sending_state(stream)))
         {
-            ABORT_QUIETLY(TEC_PROTOCOL_VIOLATION, "stream %"PRIu64" is in "
+            ABORT_QUIETLY(0, TEC_PROTOCOL_VIOLATION, "stream %"PRIu64" is in "
                 "%s state: receipt of STOP_SENDING frame is a violation",
                 stream_id, lsquic_sss2str[sss]);
             return 0;
@@ -2158,7 +2174,7 @@ process_stop_sending_frame (struct ietf_full_conn *conn,
             stream_id);
     else if (our_stream)
     {
-        ABORT_QUIETLY(TEC_PROTOCOL_VIOLATION, "received STOP_SENDING frame "
+        ABORT_QUIETLY(0, TEC_PROTOCOL_VIOLATION, "received STOP_SENDING frame "
             "on locally initiated stream that has not yet been opened");
         return 0;
     }
@@ -2167,7 +2183,7 @@ process_stop_sending_frame (struct ietf_full_conn *conn,
         max_allowed = conn->ifc_max_allowed_stream_id[stream_id & SIT_MASK];
         if (stream_id > max_allowed)
         {
-            ABORT_QUIETLY(TEC_STREAM_ID_ERROR, "incoming STOP_SENDING for "
+            ABORT_QUIETLY(0, TEC_STREAM_ID_ERROR, "incoming STOP_SENDING for "
                 "stream %"PRIu64" would exceed allowed max of %"PRIu64,
                 stream_id, max_allowed);
             return 0;
@@ -2331,7 +2347,7 @@ process_stream_frame (struct ietf_full_conn *conn,
         }
         else
         {
-            ABORT_QUIETLY(TEC_STREAM_STATE_ERROR, "received STREAM frame "
+            ABORT_QUIETLY(0, TEC_STREAM_STATE_ERROR, "received STREAM frame "
                                                 "for never-initiated stream");
             lsquic_malo_put(stream_frame);
             return 0;
@@ -2472,18 +2488,19 @@ process_connection_close_frame (struct ietf_full_conn *conn,
 {
     lsquic_stream_t *stream;
     struct lsquic_hash_elem *el;
-    uint32_t error_code;
+    unsigned error_code;
     uint16_t reason_len;
     uint8_t reason_off;
-    int parsed_len;
+    int parsed_len, app_error;
 
     parsed_len = conn->ifc_conn.cn_pf->pf_parse_connect_close_frame(p, len,
-                                        &error_code, &reason_len, &reason_off);
+                            &app_error, &error_code, &reason_len, &reason_off);
     if (parsed_len < 0)
         return 0;
     EV_LOG_CONNECTION_CLOSE_FRAME_IN(LSQUIC_LOG_CONN_ID, error_code,
                             (int) reason_len, (const char *) p + reason_off);
-    LSQ_INFO("Received CONNECTION_CLOSE frame (code: %u; reason: %.*s)",
+    LSQ_INFO("Received CONNECTION_CLOSE frame (%s-level code: %u; "
+            "reason: %.*s)", app_error ? "application" : "transport",
                 error_code, (int) reason_len, (const char *) p + reason_off);
     conn->ifc_flags |= IFC_RECV_CLOSE;
     if (!(conn->ifc_flags & IFC_CLOSING))
@@ -2607,7 +2624,7 @@ process_new_connection_id_frame (struct ietf_full_conn *conn,
             {
                 if (!LSQUIC_CIDS_EQ(&(*el)->de_cid, &cid))
                 {
-                    ABORT_QUIETLY(TEC_PROTOCOL_VIOLATION,
+                    ABORT_QUIETLY(0, TEC_PROTOCOL_VIOLATION,
                         "NEW_CONNECTION_ID: already have CID seqno %"PRIu64
                         " but with a different CID", seqno);
                     return 0;
@@ -2615,7 +2632,7 @@ process_new_connection_id_frame (struct ietf_full_conn *conn,
             }
             else if (LSQUIC_CIDS_EQ(&(*el)->de_cid, &cid))
             {
-                ABORT_QUIETLY(TEC_PROTOCOL_VIOLATION,
+                ABORT_QUIETLY(0, TEC_PROTOCOL_VIOLATION,
                     "NEW_CONNECTION_ID: received the same CID with sequence "
                     "numbers %u and %"PRIu64, (*el)->de_seqno, seqno);
                 return 0;
@@ -2660,7 +2677,7 @@ process_retire_connection_id_frame (struct ietf_full_conn *conn,
     /* [draft-ietf-quic-transport-16] Section 19.13 */
     if (conn->ifc_settings->es_scid_len == 0)
     {
-        ABORT_QUIETLY(TEC_PROTOCOL_VIOLATION, "cannot retire zero-length CID");
+        ABORT_QUIETLY(0, TEC_PROTOCOL_VIOLATION, "cannot retire zero-length CID");
         return 0;
     }
 
@@ -2674,7 +2691,7 @@ process_retire_connection_id_frame (struct ietf_full_conn *conn,
     /* [draft-ietf-quic-transport-16] Section 19.13 */
     if (seqno >= conn->ifc_scid_seqno)
     {
-        ABORT_QUIETLY(TEC_PROTOCOL_VIOLATION, "cannot retire zero-length CID");
+        ABORT_QUIETLY(0, TEC_PROTOCOL_VIOLATION, "cannot retire zero-length CID");
         return 0;
     }
 
@@ -2962,14 +2979,19 @@ process_retry_packet (struct ietf_full_conn *conn,
 {
     int cidlen_diff;
 
+    if (conn->ifc_flags & (IFC_SERVER|IFC_RETRIED))
+    {
+        LSQ_DEBUG("ignore Retry packet");
+        return 0;
+    }
+
     if (!(conn->ifc_conn.cn_dcid.len == packet_in->pi_odcid_len
             && 0 == memcmp(conn->ifc_conn.cn_dcid.idbuf,
                             packet_in->pi_data + packet_in->pi_odcid,
                             packet_in->pi_odcid_len)))
     {
-        ABORT_QUIETLY(TEC_VERSION_NEGOTIATION_ERROR, "retry packet's "
-            "ODCID does not match the original");
-        return -1;
+        LSQ_DEBUG("retry packet's ODCID does not match the original: ignore");
+        return 0;
     }
 
     cidlen_diff = (int) conn->ifc_conn.cn_dcid.len
@@ -2984,6 +3006,7 @@ process_retry_packet (struct ietf_full_conn *conn,
         return -1;
 
     LSQ_INFO("Received a retry packet.  Will retry.");
+    conn->ifc_flags |= IFC_RETRIED;
     return 0;
 }
 
@@ -3159,7 +3182,7 @@ process_regular_packet (struct ietf_full_conn *conn,
             LSQ_INFO("packet is too short to be decrypted");
             return 0;
         case DECPI_VIOLATION:
-            ABORT_QUIETLY(TEC_PROTOCOL_VIOLATION,
+            ABORT_QUIETLY(0, TEC_PROTOCOL_VIOLATION,
                                     "decrypter reports protocol violation");
             return -1;
         case DECPI_OK:
@@ -3734,7 +3757,7 @@ ietf_full_conn_ci_internal_error (struct lsquic_conn *lconn,
 {
     struct ietf_full_conn *const conn = (struct ietf_full_conn *) lconn;
     LSQ_INFO("internal error reported");
-    ABORT_QUIETLY(TEC_INTERNAL_ERROR, "Internal error");
+    ABORT_QUIETLY(0, TEC_INTERNAL_ERROR, "Internal error");
 }
 
 

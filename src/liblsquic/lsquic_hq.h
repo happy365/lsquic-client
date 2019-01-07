@@ -68,5 +68,31 @@ enum hq_uni_stream_type
 
 extern const char *const lsquic_hqelt2str[];
 
+/* [draft-ietf-quic-http-17] Section 8.1 */
+enum http_error_code
+{
+    HEC_NO_ERROR                 =  0x00,
+    HEC_WRONG_SETTING_DIRECTION  =  0x01,
+    HEC_PUSH_REFUSED             =  0x02,
+    HEC_INTERNAL_ERROR           =  0x03,
+    HEC_PUSH_ALREADY_IN_CACHE    =  0x04,
+    HEC_REQUEST_CANCELLED        =  0x05,
+    HEC_INCOMPLETE_REQUEST       =  0x06,
+    HEC_CONNECT_ERROR            =  0x07,
+    HEC_EXCESSIVE_LOAD           =  0x08,
+    HEC_VERSION_FALLBACK         =  0x09,
+    HEC_WRONG_STREAM             =  0x0A,
+    HEC_PUSH_LIMIT_EXCEEDED      =  0x0B,
+    HEC_DUPLICATE_PUSH           =  0x0C,
+    HEC_UNKNOWN_STREAM_TYPE      =  0x0D,
+    HEC_WRONG_STREAM_COUNT       =  0x0E,
+    HEC_CLOSED_CRITICAL_STREAM   =  0x0F,
+    HEC_WRONG_STREAM_DIRECTION   =  0x0010,
+    HEC_EARLY_RESPONSE           =  0x0011,
+    HEC_MISSING_SETTINGS         =  0x0012,
+    HEC_UNEXPECTED_FRAME         =  0x0013,
+    HEC_GENERAL_PROTOCOL_ERROR   =  0x00FF,
+    HEC_MALFORMED_FRAME          =  0x0100,    /* add frame type */
+};
 
 #endif

@@ -781,7 +781,7 @@ id17_gen_ping_frame (unsigned char *buf, int buf_len)
 
 static int
 id17_gen_connect_close_frame (unsigned char *buf, size_t buf_len,
-                    uint32_t error_code, const char *reason, int reason_len)
+    int app_error, unsigned error_code, const char *reason, int reason_len)
 {
     size_t needed;
     unsigned bits;
@@ -791,14 +791,16 @@ id17_gen_connect_close_frame (unsigned char *buf, size_t buf_len,
     assert(!!reason == !!reason_len);
 
     bits = vint_val2bits(reason_len);
-    needed = 1 /* Type */ + sizeof(ecode) /* Error code */ + 1 /* Frame type */
-        /* TODO: frame type instead of just zero */ + (1 << bits) + reason_len;
+    needed = 1 /* Type */ + sizeof(ecode) /* Error code */
+           + (app_error ? 0 : 1) /* Frame type */
+        /* TODO: frame type instead of just zero */
+           + (1 << bits) + reason_len;
 
     if (buf_len < needed)
         return -1;
 
     p = buf;
-    *p = 0x1C;  /* TODO: 0x1C or 0x1D */
+    *p = 0x1C + !!app_error;
     ++p;
     ecode = error_code;
 #if __BYTE_ORDER == __LITTLE_ENDIAN
@@ -806,7 +808,8 @@ id17_gen_connect_close_frame (unsigned char *buf, size_t buf_len,
 #endif
     memcpy(p, &ecode, sizeof(ecode));
     p += sizeof(ecode);
-    *p++ = 0;   /* Frame type */ /* TODO */
+    if (!app_error)
+        *p++ = 0;   /* Frame type */ /* TODO */
     vint_write(p, reason_len, bits, 1 << bits);
     p += 1 << bits;
     if (reason_len)
@@ -822,19 +825,19 @@ id17_gen_connect_close_frame (unsigned char *buf, size_t buf_len,
 
 static int
 id17_parse_connect_close_frame (const unsigned char *buf, size_t buf_len,
-        uint32_t *error_code, uint16_t *reason_len, uint8_t *reason_offset)
+        int *app_error_p, unsigned *error_code, uint16_t *reason_len,
+        uint8_t *reason_offset)
 {
     const unsigned char *const pend = buf + buf_len;
     const unsigned char *p;
     uint64_t len;
     uint16_t code;
     ptrdiff_t off;
-    int r;
+    int app_error, r;
 
-    if (buf_len < 1 + 2 + 1 + 1)
+    if (buf_len < 1 + 2 + 1)
         return -1;
 
-    /* TODO: different parsing depending on first byte value */
     p = buf + 1;
     memcpy(&code, p, 2);
     p += 2;
@@ -842,11 +845,14 @@ id17_parse_connect_close_frame (const unsigned char *buf, size_t buf_len,
     code = bswap_16(code);
 #endif
 
-    /* Read and throw away the frame type that caused closure. (TODO) */
-    r = vint_read(p, pend, &len);
-    if (r < 0)
-        return -1;
-    p += r;
+    app_error = buf[0] == 0x1D;
+    if (!app_error)
+    {
+        r = vint_read(p, pend, &len);
+        if (r < 0)
+            return -1;
+        p += r;
+    }
 
     r = vint_read(p, pend, &len);
     if (r < 0)
@@ -857,6 +863,7 @@ id17_parse_connect_close_frame (const unsigned char *buf, size_t buf_len,
     if (buf_len < off + len)
         return -2;
 
+    *app_error_p = app_error;
     *error_code = code;
     *reason_len = len;
     *reason_offset = off;

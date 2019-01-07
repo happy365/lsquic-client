@@ -694,14 +694,16 @@ gquic_be_gen_ping_frame (unsigned char *buf, int buf_len)
 
 int
 gquic_be_gen_connect_close_frame (unsigned char *buf, size_t buf_len,
-                    uint32_t error_code, const char *reason, int reason_len)
+    int app_error_UNUSED, unsigned ecode, const char *reason, int reason_len)
 {
+    uint32_t error_code;
     unsigned char *p = buf;
     if (buf_len < 7)
         return -1;
 
     *p = 0x02;
     ++p;
+    error_code = ecode;
 #if __BYTE_ORDER == __LITTLE_ENDIAN
     error_code = bswap_32(error_code);
 #endif
@@ -725,16 +727,23 @@ gquic_be_gen_connect_close_frame (unsigned char *buf, size_t buf_len,
 
 int
 gquic_be_parse_connect_close_frame (const unsigned char *buf, size_t buf_len,
-        uint32_t *error_code, uint16_t *reason_len, uint8_t *reason_offset)
+        int *app_error, unsigned *error_code_p,
+        uint16_t *reason_len, uint8_t *reason_offset)
 {
+    uint32_t error_code;
+
     if (buf_len < 7)
         return -1;
 
-    READ_UINT(*error_code, 32, buf + 1, 4);
+    READ_UINT(error_code, 32, buf + 1, 4);
     READ_UINT(*reason_len, 16, buf + 1 + 4, 2);
     *reason_offset = 7;
     if (buf_len < 7u + *reason_len)
         return -2;
+
+    *error_code_p = error_code;
+    if (app_error)
+        *app_error = 0;
 
     return 7 + *reason_len;
 }

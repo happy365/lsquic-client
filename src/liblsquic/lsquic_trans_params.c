@@ -330,11 +330,18 @@ lsquic_tp_to_str (const struct transport_params *params, char *buf, size_t sz)
 #undef SEMICOLON
 #define SEMICOLON ""
     WRITE_ONE_PARAM(max_ack_delay, "%"PRIu64);
-    if (params->tp_flags & TPI_STATELESS_RESET_TOKEN)
+    if (params->tp_flags & TRAPA_RESET_TOKEN)
     {
         lsquic_hexstr(params->tp_stateless_reset_token,
             sizeof(params->tp_stateless_reset_token), tok_str, sizeof(tok_str));
         nw = snprintf(buf, end - buf, "; stateless_reset_token: %s", tok_str);
+        buf += nw;
+    }
+    if (params->tp_flags & TRAPA_RESET_TOKEN)
+    {
+        char cidbuf_[MAX_CID_LEN * 2 + 1];
+        nw = snprintf(buf, end - buf, "; original DCID (ODCID): %"CID_FMT,
+                                        CID_BITS(&params->tp_original_cid));
         buf += nw;
     }
 

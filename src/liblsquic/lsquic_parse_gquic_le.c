@@ -587,7 +587,8 @@ gquic_le_gen_ping_frame (unsigned char *buf, int buf_len)
 
 static int
 gquic_le_gen_connect_close_frame (unsigned char *buf, size_t buf_len,
-                    uint32_t error_code, const char *reason, int reason_len)
+        int app_error_UNUSED, unsigned error_code, const char *reason,
+        int reason_len)
 {
     unsigned char *p = buf;
     if (buf_len < 7)
@@ -595,7 +596,7 @@ gquic_le_gen_connect_close_frame (unsigned char *buf, size_t buf_len,
 
     *p = 0x02;
     ++p;
-    write_vary_len_to_buf(error_code, p, 4);
+    write_vary_len_to_buf(error_code, p, sizeof(error_code));
     p += 4;
     write_vary_len_to_buf(reason_len, p, 2);
     p += 2;
@@ -610,7 +611,8 @@ gquic_le_gen_connect_close_frame (unsigned char *buf, size_t buf_len,
 
 static int
 gquic_le_parse_connect_close_frame (const unsigned char *buf, size_t buf_len,
-        uint32_t *error_code, uint16_t *reason_len, uint8_t *reason_offset)
+        int *app_error, unsigned *error_code, uint16_t *reason_len,
+        uint8_t *reason_offset)
 {
     if (buf_len < 7)
         return -1;
@@ -620,6 +622,8 @@ gquic_le_parse_connect_close_frame (const unsigned char *buf, size_t buf_len,
     *reason_offset = 7;
     if (buf_len < 7u + *reason_len)
         return -2;
+    if (app_error)
+        *app_error = 0;
 
     return 7 + *reason_len;
 }

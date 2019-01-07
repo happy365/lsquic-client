@@ -83,11 +83,12 @@ gquic_be_gen_ping_frame (unsigned char *buf, int buf_len);
 
 int
 gquic_be_gen_connect_close_frame (unsigned char *buf, size_t buf_len,
-                    uint32_t error_code, const char *reason, int reason_len);
+    int app_error, unsigned error_code, const char *reason, int reason_len);
 
 int
 gquic_be_parse_connect_close_frame (const unsigned char *buf, size_t buf_len,
-        uint32_t *error_code, uint16_t *reason_len, uint8_t *reason_offset);
+        int *app_error, unsigned *error_code,
+        uint16_t *reason_len, uint8_t *reason_offset);
 
 int
 gquic_be_gen_goaway_frame(unsigned char *buf, size_t buf_len, uint32_t error_code,

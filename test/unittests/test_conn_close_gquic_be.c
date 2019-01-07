@@ -122,7 +122,7 @@ run_parse_tests (void)
         uint16_t reason_len = ~0;
         uint8_t reason_off = ~0;
         int sz = pf->pf_parse_connect_close_frame(test->buf, test->buf_len,
-                                        &error_code, &reason_len, &reason_off);
+                                NULL, &error_code, &reason_len, &reason_off);
         assert(sz == test->retval);
         if (0 == sz)
         {
@@ -142,7 +142,7 @@ run_gen_tests (void)
     {
         unsigned char buf[0x100];
         int sz = pf->pf_gen_connect_close_frame(buf, sizeof(buf),
-                    test->error_code, test->reason,
+                    0, test->error_code, test->reason,
                     test->reason ? strlen(test->reason) : 0);
         assert(sz == test->retval);
         if (0 == sz)
