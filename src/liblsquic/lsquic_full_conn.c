@@ -1377,9 +1377,10 @@ process_ack (struct full_conn *conn, struct ack_info *acki,
     LSQ_DEBUG("Processing ACK");
     if (0 == lsquic_send_ctl_got_ack(&conn->fc_send_ctl, acki, received))
     {
-        if (lsquic_send_ctl_largest_ack2ed(&conn->fc_send_ctl))
+        if (lsquic_send_ctl_largest_ack2ed(&conn->fc_send_ctl, PNS_APP))
             lsquic_rechist_stop_wait(&conn->fc_rechist,
-                lsquic_send_ctl_largest_ack2ed(&conn->fc_send_ctl) + 1);
+                lsquic_send_ctl_largest_ack2ed(&conn->fc_send_ctl, PNS_APP)
+                                                                        + 1);
         return 0;
     }
     else

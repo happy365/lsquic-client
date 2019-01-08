@@ -16,36 +16,25 @@
 
 
 
+
+/* This function does not support Q044 */
 int
 lsquic_parse_packet_in_begin (lsquic_packet_in_t *packet_in, size_t length,
             int is_server, unsigned cid_len, struct packin_parse_state *state)
 {
-    lsquic_ver_tag_t tag;
-
     if (length > 0)
     {
-        switch (packet_in->pi_data[0] & 0x88)
+        switch (packet_in->pi_data[0] & 0xC0)
         {
-        case 0x88:
+        case 0xC0:
         case 0x80:
-            if (length < 1 + sizeof(tag))
-                return -1;
-            memcpy(&tag, packet_in->pi_data + 1, sizeof(tag));
-            if (LSQVER_044 == lsquic_tag2ver(tag))
-                return lsquic_Q044_parse_packet_in_long_begin(packet_in,
+            return lsquic_ID17_parse_packet_in_long_begin(packet_in,
                                         length, is_server, cid_len, state);
-            else
-                return lsquic_ID17_parse_packet_in_long_begin(packet_in,
-                                        length, is_server, cid_len, state);
-        case 0x08:
+        case 0x00:
             return lsquic_gquic_parse_packet_in_begin(packet_in, length,
                                                     is_server, cid_len, state);
         default:
-            if (packet_in->pi_data[0] & 0x40)
-                return lsquic_ID17_parse_packet_in_short_begin(packet_in,
-                                        length, is_server, cid_len, state);
-            else
-                return lsquic_Q044_parse_packet_in_short_begin(packet_in,
+            return lsquic_ID17_parse_packet_in_short_begin(packet_in,
                                         length, is_server, cid_len, state);
         }
     }

@@ -86,7 +86,7 @@ typedef struct lsquic_send_ctl {
      * is set.  (The "ack2ed" is odd enough to not be confused with anything
      * else and it is not insanely long.)
      */
-    lsquic_packno_t                 sc_largest_ack2ed;
+    lsquic_packno_t                 sc_largest_ack2ed[N_PNS];
     lsquic_time_t                   sc_loss_to;
     uint64_t                        sc_ecn_total_acked[N_PNS];
     uint64_t                        sc_ecn_ce_cnt[N_PNS];
@@ -149,7 +149,8 @@ lsquic_send_ctl_expire_all (lsquic_send_ctl_t *ctl);
 
 #define lsquic_send_ctl_n_scheduled(ctl) (+(ctl)->sc_n_scheduled)
 
-#define lsquic_send_ctl_largest_ack2ed(ctl) (+(ctl)->sc_largest_ack2ed)
+#define lsquic_send_ctl_largest_ack2ed(ctl, pns) \
+                                            (+(ctl)->sc_largest_ack2ed[pns])
 
 #if LSQUIC_EXTRA_CHECKS
 void

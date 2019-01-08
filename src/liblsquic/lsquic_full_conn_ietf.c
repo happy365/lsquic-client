@@ -1826,12 +1826,17 @@ static int
 process_ack (struct ietf_full_conn *conn, struct ack_info *acki,
              lsquic_time_t received)
 {
+    enum packnum_space pns;
+    lsquic_packno_t packno;
+
     LSQ_DEBUG("Processing ACK");
     if (0 == lsquic_send_ctl_got_ack(&conn->ifc_send_ctl, acki, received))
     {
-        if (lsquic_send_ctl_largest_ack2ed(&conn->ifc_send_ctl))
-            lsquic_rechist_stop_wait(&conn->ifc_rechist[ acki->pns ],
-                lsquic_send_ctl_largest_ack2ed(&conn->ifc_send_ctl) + 1);
+        pns = acki->pns;
+        packno = lsquic_send_ctl_largest_ack2ed(&conn->ifc_send_ctl, pns);
+        /* FIXME TODO zero is a valid packet number */
+        if (packno)
+            lsquic_rechist_stop_wait(&conn->ifc_rechist[ pns ], packno + 1);
         return 0;
     }
     else

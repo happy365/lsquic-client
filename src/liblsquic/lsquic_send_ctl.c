@@ -877,8 +877,8 @@ lsquic_send_ctl_got_ack (lsquic_send_ctl_t *ctl,
     }
     lsquic_send_ctl_sanity_check(ctl);
 
-    if ((ctl->sc_flags & SC_NSTP) && ack2ed[1] > ctl->sc_largest_ack2ed)
-        ctl->sc_largest_ack2ed = ack2ed[1];
+    if ((ctl->sc_flags & SC_NSTP) && ack2ed[1] > ctl->sc_largest_ack2ed[pns])
+        ctl->sc_largest_ack2ed[pns] = ack2ed[1];
 
     if (ctl->sc_n_in_flight_retx == 0)
         ctl->sc_flags |= SC_WAS_QUIET;
