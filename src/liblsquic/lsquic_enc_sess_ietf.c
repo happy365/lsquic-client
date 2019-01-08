@@ -184,16 +184,19 @@ gen_hp_mask_aes (struct enc_sess_iquic *enc_sess,
     int out_len;
 
     EVP_CIPHER_CTX_init(&hp_ctx);
-    if (!(EVP_EncryptInit_ex(&hp_ctx, pair->ykp_hp, NULL,
+    if (EVP_EncryptInit_ex(&hp_ctx, pair->ykp_hp, NULL,
                                 crypto_ctx->yk_hp_buf, 0)
-        && EVP_EncryptUpdate(&hp_ctx, mask, &out_len, sample, 16)))
+        && EVP_EncryptUpdate(&hp_ctx, mask, &out_len, sample, 16))
+    {
+        assert(out_len >= 5);
+    }
+    else
     {
         LSQ_WARN("cannot generate hp mask, error code: %"PRIu32,
                                                             ERR_get_error());
         enc_sess->esi_conn->cn_if->ci_internal_error(enc_sess->esi_conn,
             "cannot generate hp mask, error code: %"PRIu32, ERR_get_error());
     }
-    assert(out_len >= 5);
 
     (void) EVP_CIPHER_CTX_cleanup(&hp_ctx);
 }
@@ -763,7 +766,7 @@ iquic_esfi_get_peer_transport_params (enc_session_t *enc_session_p,
                 lsquic_cid2str(&enc_sess->esi_odcid, cidbuf[0]);
                 lsquic_cid2str(&trans_params->tp_original_cid, cidbuf[1]);
                 LSQ_DEBUG("server provided ODCID %s that does not match "
-                    "our ODCID %s", cidbuf[1], cidbuf[2]);
+                    "our ODCID %s", cidbuf[1], cidbuf[0]);
             }
             return -1;
         }

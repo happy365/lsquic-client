@@ -624,9 +624,9 @@ static const struct parse_packet_in_test tests[] = {
         /* Packet number: */0x9B,
         /* Payload: */      'P', 'A', 'Y', 'L', 'O', 'A', 'D',
         },
-        .ppit_is_server  = 1,
         .ppit_version    = LSQVER_044,
         .ppit_retval     = 0,
+        .ppit_is_server  = 0,
         .ppit_pi_flags   = 0,
         .ppit_conn_id    = 0,
         .ppit_packno     = 0x9B,
@@ -643,10 +643,10 @@ static const struct parse_packet_in_test tests[] = {
         /* Packet number: */0x9B, 0x03, 0x02, 0x01,
         /* Payload: */      'P', 'A', 'Y', 'L', 'O', 'A', 'D',
         },
-        .ppit_is_server  = 1,
         .ppit_version    = LSQVER_044,
         .ppit_retval     = 0,
         .ppit_packno     = 0x9B030201,
+        .ppit_is_server  = 0,
         .ppit_header_sz  = 1 + 0 + 4,
         .ppit_bufsz      = 1 + 0 + 4 + 7,
         .ppit_data_sz    = 1 + 0 + 4 + 7,
@@ -685,7 +685,7 @@ static const struct parse_packet_in_test tests[] = {
         /* Payload: */      'P', 'A', 'Y', 'L', 'O', 'A', 'D',
         },
         .ppit_bufsz      = 1 + 4 + 1 + 8 + 4 + 7,
-        .ppit_is_server  = 1,
+        .ppit_is_server  = 0,
         .ppit_version    = LSQVER_044,
         .ppit_retval     = 0,
         .ppit_pi_flags   = PI_CONN_ID,
@@ -712,24 +712,12 @@ run_ppi_test (struct lsquic_mm *mm, const struct parse_packet_in_test *ppit)
     packet_in->pi_flags |= PI_OWN_DATA;
     memcpy(packet_in->pi_data, ppit->ppit_buf, ppit->ppit_bufsz);
 
-    /* Server should be able to differentiate different header formats
-     * because it expect the connection ID to be there, while the client
-     * needs help.
-     */
-    if (ppit->ppit_is_server &&
-            /* In addition, some tests verify parsing of GQUIC packets in
-             * server mode where there is no connection ID.  This is for
-             * completeness and does not represent a real-life scenario,
-             * as the server will always require the client to send the
-             * connection ID.
-             */
-            !(!(ppit->ppit_pi_flags & PI_CONN_ID)
-                                    && ppit->ppit_version < LSQVER_044))
-        s = lsquic_parse_packet_in_begin(packet_in, ppit->ppit_bufsz,
-                                            ppit->ppit_is_server, 8, &ppstate);
-    else if (ppit->ppit_version < LSQVER_044)
+    if (ppit->ppit_version < LSQVER_044)
         s = lsquic_gquic_parse_packet_in_begin(packet_in, ppit->ppit_bufsz,
             ppit->ppit_is_server, -1 /* GQUIC does not use it */, &ppstate);
+    else if (ppit->ppit_version == LSQVER_044)
+        s = lsquic_Q044_parse_packet_in_begin(packet_in, ppit->ppit_bufsz,
+                                            ppit->ppit_is_server, 8, &ppstate);
     else
         s = lsquic_ID17_parse_packet_in_begin(packet_in, ppit->ppit_bufsz,
                                             ppit->ppit_is_server, 8, &ppstate);
