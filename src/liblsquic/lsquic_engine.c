@@ -1604,7 +1604,6 @@ lsquic_engine_add_cid (struct lsquic_engine_public *enpub,
     struct conn_cid_elem *const cce = &conn->cn_cces[cce_idx];
 
     assert(cce_idx < conn->cn_n_cces);
-    assert(cce_idx != conn->cn_cur_cce_idx);
     assert(!(cce->cce_hash_el.qhe_flags & QHE_HASHED));
 
     if (lsquic_hash_insert(engine->conns_hash, cce->cce_cid.idbuf,
@@ -1631,7 +1630,6 @@ lsquic_engine_retire_cid (struct lsquic_engine_public *enpub,
     struct conn_cid_elem *const cce = &conn->cn_cces[cce_idx];
 
     assert(cce_idx < conn->cn_n_cces);
-    assert(cce_idx != conn->cn_cur_cce_idx);
 
     if (cce->cce_hash_el.qhe_flags & QHE_HASHED)
         lsquic_hash_erase(engine->conns_hash, &cce->cce_hash_el);

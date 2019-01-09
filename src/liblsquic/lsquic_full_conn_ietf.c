@@ -97,6 +97,7 @@ enum ifull_conn_flags
     IFC_GOT_PRST      = 1 << 20,
     IFC_IGNORE_INIT   = 1 << 21,
     IFC_RETRIED       = 1 << 22,
+    IFC_SWITCH_DCID   = 1 << 23, /* Perform DCID switch when a new CID becomes available */
 };
 
 enum send_flags
@@ -2677,7 +2678,7 @@ process_retire_connection_id_frame (struct ietf_full_conn *conn,
     struct lsquic_conn *const lconn = &conn->ifc_conn;
     struct conn_cid_elem *cce;
     uint64_t seqno;
-    int parsed_len, dcid_change;
+    int parsed_len;
 
     /* [draft-ietf-quic-transport-16] Section 19.13 */
     if (conn->ifc_settings->es_scid_len == 0)
@@ -2696,7 +2697,8 @@ process_retire_connection_id_frame (struct ietf_full_conn *conn,
     /* [draft-ietf-quic-transport-16] Section 19.13 */
     if (seqno >= conn->ifc_scid_seqno)
     {
-        ABORT_QUIETLY(0, TEC_PROTOCOL_VIOLATION, "cannot retire zero-length CID");
+        ABORT_QUIETLY(0, TEC_PROTOCOL_VIOLATION, "cannot retire CID seqno="
+                        "%"PRIu64" as it has not been allocated yet", seqno);
         return 0;
     }
 
@@ -2711,18 +2713,17 @@ process_retire_connection_id_frame (struct ietf_full_conn *conn,
         return parsed_len;
     }
 
-    dcid_change = ! LSQUIC_CIDS_EQ(CN_SCID(&conn->ifc_conn),
-                                                &packet_in->pi_dcid);
-    LSQ_DEBUGC("retired CID %"CID_FMT"; seqno: %u; is current: %d; "
-        "DCID change: %d", CID_BITS(&cce->cce_cid), cce->cce_seqno,
-        seqno == cce->cce_seqno, dcid_change);
+    LSQ_DEBUGC("retiring CID %"CID_FMT"; seqno: %u; is current: %d",
+        CID_BITS(&cce->cce_cid), cce->cce_seqno,
+        seqno == lconn->cn_cur_cce_idx);
     lsquic_engine_retire_cid(conn->ifc_enpub, lconn, cce - lconn->cn_cces,
                                                         packet_in->pi_received);
     memset(cce, 0, sizeof(*cce));
+
     if ((1 << conn->ifc_conn.cn_n_cces) - 1 != conn->ifc_conn.cn_cces_mask)
         conn->ifc_send_flags |= SF_SEND_NEW_CID;
 
-    if (seqno == lconn->cn_cur_cce_idx && !dcid_change)
+    if (seqno == lconn->cn_cur_cce_idx)
     {
         /* When current connection ID is retired, we need to pick the new
          * current CCE index.  We prefer a CCE that's already been used
@@ -2766,6 +2767,10 @@ process_retire_connection_id_frame (struct ietf_full_conn *conn,
         }
         else
         {
+            /* XXX This is a corner case: this connection is no longer
+             * reachable.  Perhaps we could simply close it instead of
+             * waiting for it to time out.
+             */
             lconn->cn_cur_cce_idx = 0;
             LSQ_INFO("last SCID retired; set current CCE index to 0");
         }
@@ -3048,6 +3053,11 @@ is_stateless_reset (struct ietf_full_conn *conn,
  *
  * XXX Add flag to only switch DCID if we weren't the initiator.
  */
+/* This function does two things:
+ *  1. Sets the new current SCID if the DCID in the incoming packet has not
+ *          been used before; and
+ *  2. Initiates its own switch to a new DCID if there are any.
+ */
 static int
 on_dcid_change (struct ietf_full_conn *conn, const lsquic_cid_t *dcid_in)
 {
@@ -3055,6 +3065,8 @@ on_dcid_change (struct ietf_full_conn *conn, const lsquic_cid_t *dcid_in)
     struct conn_cid_elem *cce;
     struct dcid_elem **el, **dces[2];
     int eq;
+
+    LSQ_DEBUG("peer switched DCID");
 
     for (cce = lconn->cn_cces; cce < END_OF_CCES(lconn); ++cce)
         if (cce - lconn->cn_cces != lconn->cn_cur_cce_idx
@@ -3074,6 +3086,13 @@ on_dcid_change (struct ietf_full_conn *conn, const lsquic_cid_t *dcid_in)
             "not switching DCID", CID_BITS(dcid_in));
         return 0;
     }
+
+    cce->cce_flags |= CCE_USED;
+    lconn->cn_cur_cce_idx = cce - lconn->cn_cces;
+    LSQ_DEBUGC("on DCID change: set current SCID to %"CID_FMT,
+                                                    CID_BITS(CN_SCID(lconn)));
+
+    /* Part II: initiate own DCID switch */
 
     dces[0] = NULL;
     dces[1] = NULL;
@@ -3095,13 +3114,13 @@ on_dcid_change (struct ietf_full_conn *conn, const lsquic_cid_t *dcid_in)
     if (!dces[0])
     {
         LSQ_INFO("No DCID available: cannot switch");
+        /* TODO: implemened delayed switch */
+        conn->ifc_flags |= IFC_SWITCH_DCID;
         return 0;
     }
 
-    cce->cce_flags |= CCE_USED;
-    lconn->cn_cur_cce_idx = cce - lconn->cn_cces;
     lconn->cn_dcid = (*dces[0])->de_cid;
-    LSQ_INFO("switched DCID");
+    LSQ_INFOC("switched DCID to %"CID_FMT, CID_BITS(&lconn->cn_dcid));
 
     if ((*dces[1])->de_hash_el.qhe_flags & QHE_HASHED)
         lsquic_hash_erase(conn->ifc_enpub->enp_srst_hash,
@@ -3210,6 +3229,11 @@ process_regular_packet (struct ietf_full_conn *conn,
             LSQ_DEBUGC("set DCID to %"CID_FMT,
                                         CID_BITS(&conn->ifc_conn.cn_dcid));
         }
+        if (!LSQUIC_CIDS_EQ(CN_SCID(&conn->ifc_conn), &packet_in->pi_dcid))
+        {
+            if (0 != on_dcid_change(conn, &packet_in->pi_dcid))
+                return -1;
+        }
         parse_regular_packet(conn, packet_in);
         if (0 == (conn->ifc_flags & (IFC_ACK_QUED_INIT << pns)))
         {
@@ -3221,11 +3245,6 @@ process_regular_packet (struct ietf_full_conn *conn,
             conn->ifc_n_slack_akbl[pns]
                                 += !!(frame_types & IQUIC_FRAME_ACKABLE_MASK);
             try_queueing_ack(conn, pns, was_missing, packet_in->pi_received);
-        }
-        if (!LSQUIC_CIDS_EQ(CN_SCID(&conn->ifc_conn), &packet_in->pi_dcid))
-        {
-            if (0 != on_dcid_change(conn, &packet_in->pi_dcid))
-                return -1;
         }
         conn->ifc_incoming_ecn <<= 1;
         conn->ifc_incoming_ecn |=
