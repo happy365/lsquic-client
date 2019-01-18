@@ -1,4 +1,4 @@
-/* Copyright (c) 2017 - 2018 LiteSpeed Technologies Inc.  See LICENSE. */
+/* Copyright (c) 2017 - 2019 LiteSpeed Technologies Inc.  See LICENSE. */
 /*
  * lsquic_conn_public.h -- Connection's "public interface"
  *
@@ -16,6 +16,9 @@ struct lsquic_mm;
 struct lsquic_hash;
 struct headers_stream;
 struct lsquic_send_ctl;
+#if LSQUIC_CONN_STATS
+struct conn_stats;
+#endif
 struct qpack_enc_hdl;
 struct qpack_dec_hdl;
 struct h3_prio_tree;
@@ -44,6 +47,9 @@ struct lsquic_conn_public {
         }                       ietf;
     }                               u;
     struct lsquic_send_ctl         *send_ctl;
+#if LSQUIC_CONN_STATS
+    struct conn_stats              *conn_stats;
+#endif
 };
 
 #endif

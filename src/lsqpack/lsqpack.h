@@ -1,4 +1,4 @@
-/* Copyright (c) 2017 - 2018 LiteSpeed Technologies Inc.  See LICENSE. */
+/* Copyright (c) 2017 - 2019 LiteSpeed Technologies Inc.  See LICENSE. */
 /*
  * lsqpack.h - QPACK library
  */
@@ -6,7 +6,7 @@
 /*
 MIT License
 
-Copyright (c) 2018 LiteSpeed Technologies Inc
+Copyright (c) 2018 - 2019 LiteSpeed Technologies Inc
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -59,10 +59,6 @@ typedef unsigned lsqpack_abs_id_t;
 
 struct lsqpack_enc;
 struct lsqpack_dec;
-
-typedef void (*lsqpack_stream_write_f)(void *stream, void *buf, size_t sz);
-typedef void (*lsqpack_stream_wantread_f)(void *stream, int wantread);
-typedef void (*lsqpack_stream_wantwrite_f)(void *stream, int wantwrite);
 
 enum lsqpack_enc_opts
 {
@@ -165,7 +161,7 @@ enum lsqpack_enc_flags
      * Never index this field.  This will set the 'N' bit on Literal Header
      * Field With Name Reference, Literal Header Field With Post-Base Name
      * Reference, and Literal Header Field Without Name Reference instructions
-     * in the header block.  Implies LQEF_DONT_INDEX.
+     * in the header block.  Implies LQEF_NO_INDEX.
      */
     LQEF_NEVER_INDEX = 1 << 1,
 };

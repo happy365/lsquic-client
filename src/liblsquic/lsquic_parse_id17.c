@@ -1,4 +1,4 @@
-/* Copyright (c) 2017 - 2018 LiteSpeed Technologies Inc.  See LICENSE. */
+/* Copyright (c) 2017 - 2019 LiteSpeed Technologies Inc.  See LICENSE. */
 /*
  * lsquic_parse_id17.c -- Parsing functions specific to Internet Draft 17
  *                          version of IETF QUIC
@@ -1015,7 +1015,7 @@ id17_calc_crypto_frame_header_sz (uint64_t offset)
 }
 
 
-static enum QUIC_FRAME_TYPE
+static enum quic_frame_type
 id17_parse_frame_type (unsigned char byte)
 {
     return lsquic_iquic_byte2type[byte];

@@ -1,4 +1,4 @@
-/* Copyright (c) 2017 - 2018 LiteSpeed Technologies Inc.  See LICENSE. */
+/* Copyright (c) 2017 - 2019 LiteSpeed Technologies Inc.  See LICENSE. */
 /*
  * lsquic_enc_sess_ietf.c -- Crypto session for IETF QUIC
  */
@@ -534,11 +534,6 @@ init_client (struct enc_sess_iquic *const enc_sess)
     SSL_CTX_set_min_proto_version(ssl_ctx, TLS1_3_VERSION);
     SSL_CTX_set_max_proto_version(ssl_ctx, TLS1_3_VERSION);
     SSL_CTX_set_default_verify_paths(ssl_ctx);
-    if (!(SSL_CTX_set_quic_method(ssl_ctx, &cry_quic_method)))
-    {
-        LSQ_INFO("could not set stream method");
-        goto err;
-    }
 
     transpa_len = gen_trans_params(enc_sess, trans_params,
                                                     sizeof(trans_params));
@@ -554,6 +549,11 @@ init_client (struct enc_sess_iquic *const enc_sess)
         SSL_CTX_free(ssl_ctx);
         LSQ_ERROR("cannot create SSL object: %s",
             ERR_error_string(ERR_get_error(), errbuf));
+        goto err;
+    }
+    if (!(SSL_set_quic_method(enc_sess->esi_ssl, &cry_quic_method)))
+    {
+        LSQ_INFO("could not set stream method");
         goto err;
     }
     if (1 != SSL_set_quic_transport_params(enc_sess->esi_ssl, trans_params,

@@ -1,4 +1,4 @@
-/* Copyright (c) 2017 - 2018 LiteSpeed Technologies Inc.  See LICENSE. */
+/* Copyright (c) 2017 - 2019 LiteSpeed Technologies Inc.  See LICENSE. */
 /*
  * http_client.c -- A simple HTTP/QUIC client
  */
@@ -32,6 +32,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <event2/event.h>
+#include <math.h>
 
 
 #ifndef WIN32
@@ -45,9 +46,15 @@
 #include "prog.h"
 
 #include "../src/liblsquic/lsquic_logger.h"
+#include "../src/liblsquic/lsquic_int_types.h"
+#include "../src/liblsquic/lsquic_util.h"
+
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
 
 /* This is used to exercise generating and sending of priority frames */
 static int randomly_reprioritize_streams;
+
+static int s_display_cert_chain;
 
 /* If this file descriptor is open, the client will accept server push and
  * dump the contents here.  See -u flag.
@@ -59,6 +66,71 @@ static int promise_fd = -1;
  * lsquic_stream_get_hset() when the first "on_read" event is called.
  */
 static int g_header_bypass;
+
+static int s_discard_response;
+
+struct sample_stats
+{
+    unsigned        n;
+    unsigned long   min, max;
+    unsigned long   sum;        /* To calculate mean */
+    unsigned long   sum_X2;     /* To calculate stddev */
+};
+
+static struct sample_stats  s_stat_to_conn,     /* Time to connect */
+                            s_stat_ttfb,
+                            s_stat_req;     /* From TTFB to EOS */
+static unsigned s_stat_conns_ok, s_stat_conns_failed;
+static unsigned long s_stat_downloaded_bytes;
+
+static void
+update_sample_stats (struct sample_stats *stats, unsigned long val)
+{
+    LSQ_DEBUG("%s: %p: %lu", __func__, stats, val);
+    if (stats->n)
+    {
+        if (val < stats->min)
+            stats->min = val;
+        else if (val > stats->max)
+            stats->max = val;
+    }
+    else
+    {
+        stats->min = val;
+        stats->max = val;
+    }
+    stats->sum += val;
+    stats->sum_X2 += val * val;
+    ++stats->n;
+}
+
+
+static void
+calc_sample_stats (const struct sample_stats *stats,
+        long double *mean_p, long double *stddev_p)
+{
+    unsigned long mean, tmp;
+
+    if (stats->n)
+    {
+        mean = stats->sum / stats->n;
+        *mean_p = (long double) mean;
+        if (stats->n > 1)
+        {
+            tmp = stats->sum_X2 - stats->n * mean * mean;
+            tmp /= stats->n - 1;
+            *stddev_p = sqrtl((long double) tmp);
+        }
+        else
+            *stddev_p = 0;
+    }
+    else
+    {
+        *mean_p = 0;
+        *stddev_p = 0;
+    }
+}
+
 
 struct lsquic_conn_ctx;
 
@@ -86,13 +158,12 @@ struct http_client_ctx {
     unsigned                     hcc_total_n_reqs;
     unsigned                     hcc_reqs_per_conn;
     unsigned                     hcc_concurrency;
+    unsigned                     hcc_cc_reqs_per_conn;
     unsigned                     hcc_n_open_conns;
 
     enum {
-        HCC_DISCARD_RESPONSE    = (1 << 0),
         HCC_SEEN_FIN            = (1 << 1),
         HCC_ABORT_ON_INCOMPLETE = (1 << 2),
-        HCC_PROCESSED_HEADERS   = (1 << 3),
     }                            hcc_flags;
     struct prog                 *prog;
     const char                  *qif_file;
@@ -103,9 +174,14 @@ struct lsquic_conn_ctx {
     TAILQ_ENTRY(lsquic_conn_ctx) next_ch;
     lsquic_conn_t       *conn;
     struct http_client_ctx   *client_ctx;
+    lsquic_time_t        ch_created;
     unsigned             ch_n_reqs;    /* This number gets decremented as streams are closed and
                                         * incremented as push promises are accepted.
                                         */
+    unsigned             ch_n_cc_streams;   /* This number is incremented as streams are opened
+                                             * and decremented as streams are closed. It should
+                                             * never exceed hcc_cc_reqs_per_conn in client_ctx.
+                                             */
 };
 
 
@@ -124,6 +200,8 @@ static void
 hset_dump (const struct hset *, FILE *);
 static void
 hset_destroy (void *hset);
+static void
+display_cert_chain (lsquic_conn_t *);
 
 
 static void
@@ -139,6 +217,18 @@ create_connections (struct http_client_ctx *client_ctx)
 }
 
 
+static void
+create_streams (struct http_client_ctx *client_ctx, lsquic_conn_ctx_t *conn_h)
+{
+    while (conn_h->ch_n_reqs - conn_h->ch_n_cc_streams &&
+            conn_h->ch_n_cc_streams < client_ctx->hcc_cc_reqs_per_conn)
+    {
+        lsquic_conn_make_stream(conn_h->conn);
+        conn_h->ch_n_cc_streams++;
+    }
+}
+
+
 static lsquic_conn_ctx_t *
 http_client_on_new_conn (void *stream_if_ctx, lsquic_conn_t *conn)
 {
@@ -146,13 +236,13 @@ http_client_on_new_conn (void *stream_if_ctx, lsquic_conn_t *conn)
     lsquic_conn_ctx_t *conn_h = calloc(1, sizeof(*conn_h));
     conn_h->conn = conn;
     conn_h->client_ctx = client_ctx;
-    conn_h->ch_n_reqs = client_ctx->hcc_total_n_reqs <
-                                            client_ctx->hcc_reqs_per_conn ?
-        client_ctx->hcc_total_n_reqs : client_ctx->hcc_reqs_per_conn;
+    conn_h->ch_n_reqs = MIN(client_ctx->hcc_total_n_reqs,
+                                                client_ctx->hcc_reqs_per_conn);
     client_ctx->hcc_total_n_reqs -= conn_h->ch_n_reqs;
     TAILQ_INSERT_TAIL(&client_ctx->conn_ctxs, conn_h, next_ch);
     ++conn_h->client_ctx->hcc_n_open_conns;
-    lsquic_conn_make_stream(conn);
+    create_streams(client_ctx, conn_h);
+    conn_h->ch_created = lsquic_time_now();
     return conn_h;
 }
 
@@ -231,7 +321,21 @@ http_client_on_conn_closed (lsquic_conn_t *conn)
 static void
 http_client_on_hsk_done (lsquic_conn_t *conn, int ok)
 {
+    lsquic_conn_ctx_t *conn_h;
     LSQ_INFO("handshake %s", ok ? "completed successfully" : "failed");
+
+    if (ok && s_display_cert_chain)
+        display_cert_chain(conn);
+
+    if (ok)
+    {
+        conn_h = lsquic_conn_get_ctx(conn);
+        ++s_stat_conns_ok;
+        update_sample_stats(&s_stat_to_conn,
+                                    lsquic_time_now() - conn_h->ch_created);
+    }
+    else
+        ++s_stat_conns_failed;
 }
 
 
@@ -241,8 +345,10 @@ struct lsquic_stream_ctx {
     const char          *path;
     enum {
         HEADERS_SENT    = (1 << 0),
-        CHAIN_DISPLAYED = (1 << 1),
+        PROCESSED_HEADERS = 1 << 1,
     }                    sh_flags;
+    lsquic_time_t        sh_created;
+    lsquic_time_t        sh_ttfb;
     unsigned             count;
     struct lsquic_reader reader;
 };
@@ -263,6 +369,7 @@ http_client_on_new_stream (void *stream_if_ctx, lsquic_stream_t *stream)
     lsquic_stream_ctx_t *st_h = calloc(1, sizeof(*st_h));
     st_h->stream = stream;
     st_h->client_ctx = stream_if_ctx;
+    st_h->sh_created = lsquic_time_now();
     if (st_h->client_ctx->hcc_cur_pe)
     {
         st_h->client_ctx->hcc_cur_pe = TAILQ_NEXT(
@@ -287,6 +394,8 @@ http_client_on_new_stream (void *stream_if_ctx, lsquic_stream_t *stream)
         st_h->reader.lsqr_ctx = NULL;
     LSQ_INFO("created new stream, path: %s", st_h->path);
     lsquic_stream_wantwrite(stream, 1);
+    if (randomly_reprioritize_streams)
+        lsquic_stream_set_priority(stream, 1 + (random() & 0xFF));
 
     return st_h;
 }
@@ -391,12 +500,6 @@ http_client_on_write (lsquic_stream_t *stream, lsquic_stream_ctx_t *st_h)
 {
     ssize_t nw;
 
-    if (!(st_h->sh_flags & CHAIN_DISPLAYED))
-    {
-        display_cert_chain(lsquic_stream_conn(stream));
-        st_h->sh_flags |= CHAIN_DISPLAYED;
-    }
-
     if (st_h->sh_flags & HEADERS_SENT)
     {
         if (st_h->client_ctx->payload && test_reader_size(st_h->reader.lsqr_ctx) > 0)
@@ -444,27 +547,37 @@ http_client_on_read (lsquic_stream_t *stream, lsquic_stream_ctx_t *st_h)
 	srand(GetTickCount());
 #endif
 
-    if (g_header_bypass
-            && !(client_ctx->hcc_flags & HCC_PROCESSED_HEADERS))
-    {
-        hset = lsquic_stream_get_hset(stream);
-        if (!hset)
-        {
-            LSQ_ERROR("could not get header set from stream");
-            exit(2);
-        }
-        if (!(client_ctx->hcc_flags & HCC_DISCARD_RESPONSE))
-            hset_dump(hset, stdout);
-        hset_destroy(hset);
-        client_ctx->hcc_flags |= HCC_PROCESSED_HEADERS;
-    }
-
     do
     {
-        nread = lsquic_stream_read(stream, buf, sizeof(buf));
-        if (nread > 0)
+        if (g_header_bypass && !(st_h->sh_flags & PROCESSED_HEADERS))
         {
-            if (!(client_ctx->hcc_flags & HCC_DISCARD_RESPONSE))
+            hset = lsquic_stream_get_hset(stream);
+            if (!hset)
+            {
+                LSQ_ERROR("could not get header set from stream");
+                exit(2);
+            }
+            st_h->sh_ttfb = lsquic_time_now();
+            update_sample_stats(&s_stat_ttfb, st_h->sh_ttfb - st_h->sh_created);
+            if (s_discard_response)
+                LSQ_DEBUG("discard response: do not dump headers");
+            else
+                hset_dump(hset, stdout);
+            hset_destroy(hset);
+            st_h->sh_flags |= PROCESSED_HEADERS;
+        }
+        else if (nread = lsquic_stream_read(stream, buf, sizeof(buf)), nread > 0)
+        {
+            s_stat_downloaded_bytes += nread;
+            if (!g_header_bypass && !(st_h->sh_flags & PROCESSED_HEADERS))
+            {
+                /* First read is assumed to be the first byte */
+                st_h->sh_ttfb = lsquic_time_now();
+                update_sample_stats(&s_stat_ttfb,
+                                    st_h->sh_ttfb - st_h->sh_created);
+                st_h->sh_flags |= PROCESSED_HEADERS;
+            }
+            if (!s_discard_response)
                 (void) write(STDOUT_FILENO, buf, nread);
             if (randomly_reprioritize_streams && (st_h->count++ & 0x3F) == 0)
             {
@@ -475,12 +588,13 @@ http_client_on_read (lsquic_stream_t *stream, lsquic_stream_ctx_t *st_h)
 #endif
                 lsquic_stream_set_priority(stream, new_prio);
                 assert(s == 0);
-                LSQ_NOTICE("changed stream %"PRIu64" priority from %u to %u",
+                LSQ_DEBUG("changed stream %"PRIu64" priority from %u to %u",
                                 lsquic_stream_id(stream), old_prio, new_prio);
             }
         }
         else if (0 == nread)
         {
+            update_sample_stats(&s_stat_req, lsquic_time_now() - st_h->sh_ttfb);
             client_ctx->hcc_flags |= HCC_SEEN_FIN;
             lsquic_stream_shutdown(stream, 0);
             break;
@@ -512,20 +626,29 @@ http_client_on_close (lsquic_stream_t *stream, lsquic_stream_ctx_t *st_h)
     }
 
     LSQ_INFO("%s called", __func__);
+    struct http_client_ctx *const client_ctx = st_h->client_ctx;
     lsquic_conn_t *conn = lsquic_stream_conn(stream);
     lsquic_conn_ctx_t *conn_h;
-    TAILQ_FOREACH(conn_h, &st_h->client_ctx->conn_ctxs, next_ch)
+    TAILQ_FOREACH(conn_h, &client_ctx->conn_ctxs, next_ch)
         if (conn_h->conn == conn)
             break;
     assert(conn_h);
     --conn_h->ch_n_reqs;
+    --conn_h->ch_n_cc_streams;
     if (0 == conn_h->ch_n_reqs)
     {
         LSQ_INFO("all requests completed, closing connection");
         lsquic_conn_close(conn_h->conn);
     }
     else
-        lsquic_conn_make_stream(conn);
+    {
+        LSQ_INFO("%u active stream, %u request remain, creating %u new stream",
+            conn_h->ch_n_cc_streams,
+            conn_h->ch_n_reqs - conn_h->ch_n_cc_streams,
+            MIN((conn_h->ch_n_reqs - conn_h->ch_n_cc_streams),
+                (client_ctx->hcc_cc_reqs_per_conn - conn_h->ch_n_cc_streams)));
+        create_streams(client_ctx, conn_h);
+    }
     if (st_h->reader.lsqr_ctx)
         destroy_lsquic_reader_ctx(st_h->reader.lsqr_ctx);
     free(st_h);
@@ -556,8 +679,10 @@ usage (const char *prog)
 "   -p PATH     Path to request.  May be specified more than once.\n"
 "   -n CONNS    Number of concurrent connections.  Defaults to 1.\n"
 "   -r NREQS    Total number of requests to send.  Defaults to 1.\n"
-"   -R NREQS    Maximum number of requests per single connection.  Some\n"
+"   -R MAXREQS  Maximum number of requests per single connection.  Some\n"
 "                 connections will have fewer requests than this.\n"
+"   -w CONCUR   Number of concurrent requests per single connection.\n"
+"                 Defaults to 1.\n"
 "   -m METHOD   Method.  Defaults to GET.\n"
 "   -P PAYLOAD  Name of the file that contains payload to be used in the\n"
 "                 request.  This adds two more headers to the request:\n"
@@ -571,6 +696,9 @@ usage (const char *prog)
 "   -C DIR      Certificate store.  If specified, server certificate will\n"
 "                 be verified.\n"
 #endif
+"   -a          Display server certificate chain after successful handshake.\n"
+"   -t          Print stats to stdout.\n"
+"   -T FILE     Print stats to FILE.  If FILE is -, print stats to stdout.\n"
 "   -q FILE     QIF mode: issue requests from the QIF file and validate\n"
 "                 server responses.\n"
             , prog);
@@ -684,8 +812,9 @@ hset_create (void *hsi_ctx, int is_push_promise)
 {
     struct hset *hset;
 
-    hset = malloc(sizeof(*hset));
-    if (hset)
+    if (s_discard_response)
+        return (void *) 1;
+    else if ((hset = malloc(sizeof(*hset))))
     {
         STAILQ_INIT(hset);
         return hset;
@@ -702,6 +831,14 @@ hset_add_header (void *hset_p, unsigned name_idx,
 {
     struct hset *hset = hset_p;
     struct hset_elem *el;
+
+    if (name)
+        s_stat_downloaded_bytes += name_len + value_len + 4;    /* ": \r\n" */
+    else
+        s_stat_downloaded_bytes += 2;   /* \r\n "*/
+
+    if (s_discard_response)
+        return LSQUIC_HDR_OK;
 
     if (!name)  /* This signals end of headers.  We do no post-processing. */
         return LSQUIC_HDR_OK;
@@ -732,14 +869,17 @@ hset_destroy (void *hset_p)
     struct hset *hset = hset_p;
     struct hset_elem *el, *next;
 
-    for (el = STAILQ_FIRST(hset); el; el = next)
+    if (!s_discard_response)
     {
-        next = STAILQ_NEXT(el, next);
-        free(el->name);
-        free(el->value);
-        free(el);
+        for (el = STAILQ_FIRST(hset); el; el = next)
+        {
+            next = STAILQ_NEXT(el, next);
+            free(el->name);
+            free(el->value);
+            free(el);
+        }
+        free(hset);
     }
-    free(hset);
 }
 
 
@@ -770,6 +910,18 @@ static const struct lsquic_hset_if header_bypass_api =
     .hsi_process_header     = hset_add_header,
     .hsi_discard_header_set = hset_destroy,
 };
+
+
+static void
+display_stat (FILE *out, const struct sample_stats *stats, const char *name)
+{
+    long double mean, stddev;
+
+    calc_sample_stats(stats, &mean, &stddev);
+    fprintf(out, "%s: n: %u; min: %.2Lf ms; max: %.2Lf ms; mean: %.2Lf ms; "
+        "sd: %.2Lf ms\n", name, stats->n, (long double) stats->min / 1000,
+        (long double) stats->max / 1000, mean / 1000, stddev / 1000);
+}
 
 
 static lsquic_conn_ctx_t *
@@ -1064,6 +1216,9 @@ int
 main (int argc, char **argv)
 {
     int opt, s, was_empty;
+    lsquic_time_t start_time;
+    FILE *stats_fh = NULL;
+    long double elapsed;
     struct http_client_ctx client_ctx;
     struct stat st;
     struct path_elem *pe;
@@ -1073,11 +1228,11 @@ main (int argc, char **argv)
 
     TAILQ_INIT(&sports);
     memset(&client_ctx, 0, sizeof(client_ctx));
-    client_ctx.hcc_concurrency = 1;
     TAILQ_INIT(&client_ctx.hcc_path_elems);
     TAILQ_INIT(&client_ctx.conn_ctxs);
     client_ctx.method = "GET";
     client_ctx.hcc_concurrency = 1;
+    client_ctx.hcc_cc_reqs_per_conn = 1;
     client_ctx.hcc_reqs_per_conn = 1;
     client_ctx.hcc_total_n_reqs = 1;
     client_ctx.prog = &prog;
@@ -1089,13 +1244,16 @@ main (int argc, char **argv)
     prog_init(&prog, LSENG_HTTP, &sports, &http_client_if, &client_ctx);
 
     while (-1 != (opt = getopt(argc, argv, PROG_OPTS
-                                            "46Br:R:IKu:EP:M:n:H:p:q:t:h"
+                                         "46Br:R:IKu:EP:M:n:w:H:p:q:k:hatT:"
 #ifndef WIN32
-                                                                          "C:"
+                                                                      "C:"
 #endif
                                                                             )))
     {
         switch (opt) {
+        case 'a':
+            ++s_display_cert_chain;
+            break;
         case '4':
         case '6':
             prog.prog_ipver = opt - '0';
@@ -1109,7 +1267,7 @@ main (int argc, char **argv)
             client_ctx.hcc_flags |= HCC_ABORT_ON_INCOMPLETE;
             break;
         case 'K':
-            client_ctx.hcc_flags |= HCC_DISCARD_RESPONSE;
+            ++s_discard_response;
             break;
         case 'u':   /* Accept p<U>sh promise */
             promise_fd = open(optarg, O_WRONLY|O_CREAT|O_TRUNC, 0644);
@@ -1127,6 +1285,9 @@ main (int argc, char **argv)
             break;
         case 'n':
             client_ctx.hcc_concurrency = atoi(optarg);
+            break;
+        case 'w':
+            client_ctx.hcc_cc_reqs_per_conn = atoi(optarg);
             break;
         case 'P':
             client_ctx.payload = optarg;
@@ -1162,7 +1323,7 @@ main (int argc, char **argv)
         case 'q':
             client_ctx.qif_file = optarg;
             break;
-        case 't':
+        case 'k':
             if (TAILQ_EMPTY(&sports))
                 token = optarg;
             else
@@ -1174,11 +1335,31 @@ main (int argc, char **argv)
             prog.prog_api.ea_verify_ctx = optarg;
             break;
 #endif
+        case 't':
+            stats_fh = stdout;
+            break;
+        case 'T':
+            if (0 == strcmp(optarg, "-"))
+                stats_fh = stdout;
+            else
+            {
+                stats_fh = fopen(optarg, "w");
+                if (!stats_fh)
+                {
+                    perror("fopen");
+                    exit(1);
+                }
+            }
+            break;
         default:
             if (0 != prog_set_opt(&prog, opt, optarg))
                 exit(1);
         }
     }
+
+#if LSQUIC_CONN_STATS
+    prog.prog_api.ea_stats_fh = stats_fh;
+#endif
 
     if (client_ctx.qif_file)
     {
@@ -1201,6 +1382,7 @@ main (int argc, char **argv)
         exit(1);
     }
 
+    start_time = lsquic_time_now();
     was_empty = TAILQ_EMPTY(&sports);
     if (0 != prog_prep(&prog))
     {
@@ -1224,6 +1406,21 @@ main (int argc, char **argv)
     LSQ_DEBUG("entering event loop");
 
     s = prog_run(&prog);
+
+    if (stats_fh)
+    {
+        elapsed = (long double) (lsquic_time_now() - start_time) / 1000000;
+        fprintf(stats_fh, "overall statistics as calculated by %s:\n", argv[0]);
+        display_stat(stats_fh, &s_stat_to_conn, "time for connect");
+        display_stat(stats_fh, &s_stat_req, "time for request");
+        display_stat(stats_fh, &s_stat_ttfb, "time to 1st byte");
+        fprintf(stats_fh, "downloaded %lu application bytes in %.3Lf seconds\n",
+            s_stat_downloaded_bytes, elapsed);
+        fprintf(stats_fh, "%.2Lf reqs/sec; %.0Lf bytes/sec\n",
+            (long double) s_stat_req.n / elapsed,
+            (long double) s_stat_downloaded_bytes / elapsed);
+    }
+
     prog_cleanup(&prog);
     if (promise_fd >= 0)
         (void) close(promise_fd);

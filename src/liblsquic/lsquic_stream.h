@@ -1,4 +1,4 @@
-/* Copyright (c) 2017 - 2018 LiteSpeed Technologies Inc.  See LICENSE. */
+/* Copyright (c) 2017 - 2019 LiteSpeed Technologies Inc.  See LICENSE. */
 #ifndef LSQUIC_STREAM_H
 #define LSQUIC_STREAM_H
 
@@ -16,7 +16,7 @@ enum enc_level;
 enum swtp_status;
 struct frame_gen_ctx;
 struct data_frame;
-enum quic_ft_bit;
+enum quic_frame_type;
 
 TAILQ_HEAD(lsquic_streams_tailq, lsquic_stream);
 
@@ -184,6 +184,7 @@ enum stream_flags {
     STREAM_RST_READ     = 1 << 24,  /* User code collected the error */
     STREAM_DATA_RECVD   = 1 << 25,  /* Cache stream state calculation */
     STREAM_CRITICAL     = 1 << 26,  /* This is a critical stream */
+    STREAM_HDRS_FLUSHED = 1 << 27,  /* Only used in buffered packets mode */
 };
 
 struct lsquic_stream
@@ -287,9 +288,9 @@ enum stream_ctor_flags
                                    * performance.
                                    */
     SCF_DISP_RW_ONCE  = (1 << 3),
-    SCF_IETF          = (1 << 4),
-    SCF_HTTP          = (1 << 5),
-    SCF_CRITICAL      = (1 << 6), /* Critical stream */
+    SCF_CRITICAL      = (1 << 4), /* This is a critical stream */
+    SCF_IETF          = (1 << 5),
+    SCF_HTTP          = (1 << 6),
 };
 
 lsquic_stream_t *
@@ -411,7 +412,7 @@ void
 lsquic_stream_received_goaway (lsquic_stream_t *);
 
 void
-lsquic_stream_acked (struct lsquic_stream *, enum quic_ft_bit);
+lsquic_stream_acked (struct lsquic_stream *, enum quic_frame_type);
 
 #define lsquic_stream_is_closed(s)                                          \
     (((s)->stream_flags & (STREAM_U_READ_DONE|STREAM_U_WRITE_DONE))         \

@@ -1,4 +1,4 @@
-/* Copyright (c) 2017 - 2018 LiteSpeed Technologies Inc.  See LICENSE. */
+/* Copyright (c) 2017 - 2019 LiteSpeed Technologies Inc.  See LICENSE. */
 /*
  * lsquic_full_conn_ietf.c -- IETF QUIC connection.
  */
@@ -55,6 +55,7 @@
 #include "lsquic_qdec_hdl.h"
 #include "lsquic_full_conn.h"
 #include "lsquic_h3_prio.h"
+#include "lsquic_ietf.h"
 
 #define LSQUIC_LOGGER_MODULE LSQLM_CONN
 #define LSQUIC_LOG_CONN_ID lsquic_conn_log_cid(&conn->ifc_conn)
@@ -146,23 +147,6 @@ enum send_flags
     conn->ifc_error = CONN_ERR(app_error, code);                            \
     ABORT_WITH_FLAG(conn, LSQ_LOG_INFO, IFC_ERROR, __VA_ARGS__);            \
 } while (0)
-
-/* [draft-ietf-quic-transport-16] Section 20 */
-enum trans_error_code
-{
-    TEC_NO_ERROR                   =  0x0,
-    TEC_INTERNAL_ERROR             =  0x1,
-    TEC_SERVER_BUSY                =  0x2,
-    TEC_FLOW_CONTROL_ERROR         =  0x3,
-    TEC_STREAM_ID_ERROR            =  0x4,
-    TEC_STREAM_STATE_ERROR         =  0x5,
-    TEC_FINAL_OFFSET_ERROR         =  0x6,
-    TEC_FRAME_ENCODING_ERROR       =  0x7,
-    TEC_TRANSPORT_PARAMETER_ERROR  =  0x8,
-    TEC_VERSION_NEGOTIATION_ERROR  =  0x9,
-    TEC_PROTOCOL_VIOLATION         =  0xA,
-    TEC_INVALID_MIGRATION          =  0xC,
-};
 
 
 static enum stream_id_type
@@ -1494,27 +1478,48 @@ ietf_full_conn_ci_is_tickable (struct lsquic_conn *lconn)
     struct lsquic_stream *stream;
 
     if (!TAILQ_EMPTY(&conn->ifc_pub.service_streams))
+    {
+        LSQ_DEBUG("tickable: there are streams to be serviced");
         return 1;
+    }
 
     if (lsquic_send_ctl_can_send(&conn->ifc_send_ctl)
         && (should_generate_ack(conn) ||
             !lsquic_send_ctl_sched_is_blocked(&conn->ifc_send_ctl)))
     {
         if (conn->ifc_send_flags)
+        {
+            LSQ_DEBUG("tickable: send flags: 0x%X", conn->ifc_send_flags);
             return 1;
+        }
         if (lsquic_send_ctl_has_buffered(&conn->ifc_send_ctl))
+        {
+            LSQ_DEBUG("tickable: has buffered packets");
             return 1;
+        }
         if (!TAILQ_EMPTY(&conn->ifc_pub.sending_streams))
+        {
+            LSQ_DEBUG("tickable: there are sending streams");
             return 1;
+        }
         TAILQ_FOREACH(stream, &conn->ifc_pub.write_streams, next_write_stream)
             if (lsquic_stream_write_avail(stream))
+            {
+                LSQ_DEBUG("tickable: stream %"PRIu64" can be written to",
+                    stream->id);
                 return 1;
+            }
     }
 
     TAILQ_FOREACH(stream, &conn->ifc_pub.read_streams, next_read_stream)
         if (lsquic_stream_readable(stream))
+        {
+            LSQ_DEBUG("tickable: stream %"PRIu64" can be read from",
+                stream->id);
             return 1;
+        }
 
+    LSQ_DEBUG("not tickable");
     return 0;
 }
 
@@ -2908,7 +2913,7 @@ process_packet_frame (struct ietf_full_conn *conn,
         struct lsquic_packet_in *packet_in, const unsigned char *p, size_t len)
 {
     enum enc_level enc_level = lsquic_packet_in_enc_level(packet_in);
-    enum QUIC_FRAME_TYPE type = conn->ifc_conn.cn_pf->pf_parse_frame_type(p[0]);
+    enum quic_frame_type type = conn->ifc_conn.cn_pf->pf_parse_frame_type(p[0]);
     if (lsquic_legal_frames_by_level[enc_level] & (1 << type))
     {
         LSQ_DEBUG("about to process %s frame", frame_type_2_str[type]);

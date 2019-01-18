@@ -1,4 +1,4 @@
-/* Copyright (c) 2017 - 2018 LiteSpeed Technologies Inc.  See LICENSE. */
+/* Copyright (c) 2017 - 2019 LiteSpeed Technologies Inc.  See LICENSE. */
 #ifndef LSQUIC_SEND_CTL_H
 #define LSQUIC_SEND_CTL_H 1
 
@@ -299,6 +299,11 @@ lsquic_send_ctl_pacer_blocked (struct lsquic_send_ctl *);
 
 int
 lsquic_send_ctl_sched_is_blocked (const struct lsquic_send_ctl *);
+
+int
+
+lsquic_send_ctl_buffered_and_same_prio_as_headers (struct lsquic_send_ctl *,
+                                                const struct lsquic_stream *);
 
 int
 lsquic_send_ctl_retry (struct lsquic_send_ctl *, const unsigned char *,

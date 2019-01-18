@@ -1,4 +1,4 @@
-/* Copyright (c) 2017 - 2018 LiteSpeed Technologies Inc.  See LICENSE. */
+/* Copyright (c) 2017 - 2019 LiteSpeed Technologies Inc.  See LICENSE. */
 /*
  * lsquic_frame_reader.c -- Read HTTP frames from stream
  */
@@ -22,6 +22,8 @@
 #include "lsquic_http1x_if.h"
 #include "lsquic_headers.h"
 #include "lsquic_ev_log.h"
+#include "lsquic_hash.h"
+#include "lsquic_conn.h"
 
 #define LSQUIC_LOGGER_MODULE LSQLM_FRAME_READER
 #define LSQUIC_LOG_CONN_ID lsquic_conn_log_cid(lsquic_stream_conn(\
@@ -117,6 +119,9 @@ struct lsquic_frame_reader
      * CONTINUATION frames.  It gets added to as block fragments come in.
      */
     unsigned char                   *fr_header_block;
+#if LSQUIC_CONN_STATS
+    struct conn_stats               *fr_conn_stats;
+#endif
     unsigned                         fr_header_block_sz;
     unsigned                         fr_max_headers_sz; /* 0 means no limit */
     enum frame_reader_flags          fr_flags;
@@ -176,6 +181,9 @@ lsquic_frame_reader_new (enum frame_reader_flags flags,
                     struct lshpack_dec *hdec,
                     const struct frame_reader_callbacks *cb,
                     void *frame_reader_cb_ctx,
+#if LSQUIC_CONN_STATS
+                    struct conn_stats *conn_stats,
+#endif
                     const struct lsquic_hset_if *hsi_if, void *hsi_ctx)
 {
     struct lsquic_frame_reader *fr = malloc(sizeof(*fr));
@@ -203,6 +211,9 @@ lsquic_frame_reader_new (enum frame_reader_flags flags,
     else
         fr->fr_hsi_ctx = hsi_ctx;
     reset_state(fr);
+#if LSQUIC_CONN_STATS
+    fr->fr_conn_stats = conn_stats;
+#endif
     return fr;
 }
 
@@ -540,7 +551,12 @@ decode_and_pass_payload (struct lsquic_frame_reader *fr)
                 fr->fr_hsi_if->hsi_process_header(hset, name_idx, buf,
                                         name_len, buf + name_len, val_len);
             if (err == 0)
+            {
+#if LSQUIC_CONN_STATS
+                fr->fr_conn_stats->in.headers_uncomp += name_len + val_len;
+#endif
                 continue;
+            }
         }
         else
             err = FR_ERR_DECOMPRESS;
@@ -591,6 +607,9 @@ decode_and_pass_payload (struct lsquic_frame_reader *fr)
         fr->fr_callbacks->frc_on_headers(fr->fr_cb_ctx, uh);
     else
         fr->fr_callbacks->frc_on_push_promise(fr->fr_cb_ctx, uh);
+#if LSQUIC_CONN_STATS
+    fr->fr_conn_stats->in.headers_comp += fr->fr_header_block_sz;
+#endif
 
     return 0;
 

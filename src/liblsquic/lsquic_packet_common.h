@@ -1,4 +1,4 @@
-/* Copyright (c) 2017 - 2018 LiteSpeed Technologies Inc.  See LICENSE. */
+/* Copyright (c) 2017 - 2019 LiteSpeed Technologies Inc.  See LICENSE. */
 #ifndef LSQUIC_PACKET_COMMON_H
 #define LSQUIC_PACKET_COMMON_H 1
 
@@ -8,7 +8,7 @@
  *  I   Applicable to IETF QUIC only
  *  B   Applicable to both GQUIC and IETF QUIC.
  */
-enum QUIC_FRAME_TYPE
+enum quic_frame_type
 {
     QUIC_FRAME_INVALID,
     QUIC_FRAME_STREAM,              /* B */

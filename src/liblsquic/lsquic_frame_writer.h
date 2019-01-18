@@ -1,4 +1,4 @@
-/* Copyright (c) 2017 - 2018 LiteSpeed Technologies Inc.  See LICENSE. */
+/* Copyright (c) 2017 - 2019 LiteSpeed Technologies Inc.  See LICENSE. */
 /*
  * lsquic_frame_writer.h -- write frames to HEADERS stream.
  */
@@ -19,13 +19,20 @@ struct lsquic_stream;
 struct lsquic_reader;
 struct lsquic_http_headers;
 struct lsquic_http2_setting;
+#if LSQUIC_CONN_STATS
+struct conn_stats;
+#endif
 
 typedef ssize_t (*fw_writef_f)(struct lsquic_stream *, struct lsquic_reader *);
 
 struct lsquic_frame_writer *
 lsquic_frame_writer_new (struct lsquic_mm *, struct lsquic_stream *,
                          unsigned max_frame_sz, struct lshpack_enc *,
-                         fw_writef_f, int is_server);
+                         fw_writef_f,
+#if LSQUIC_CONN_STATS
+                         struct conn_stats *,
+#endif
+                         int is_server);
 
 void
 lsquic_frame_writer_destroy (struct lsquic_frame_writer *);

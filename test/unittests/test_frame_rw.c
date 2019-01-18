@@ -1,4 +1,4 @@
-/* Copyright (c) 2017 - 2018 LiteSpeed Technologies Inc.  See LICENSE. */
+/* Copyright (c) 2017 - 2019 LiteSpeed Technologies Inc.  See LICENSE. */
 /*
  * Generate a few thousand headers, frame them using frame writer, read them
  * using frame reader, parse them, and compare with the original list: the
@@ -29,6 +29,10 @@
 #include "lsquic_frame_reader.h"
 #include "lsquic_headers.h"
 #include "lsquic_http1x_if.h"
+#if LSQUIC_CONN_STATS
+#include "lsquic_int_types.h"
+#include "lsquic_conn.h"
+#endif
 
 
 struct lsquic_stream
@@ -205,6 +209,10 @@ test_rw (unsigned max_frame_sz)
     struct lshpack_enc henc;
     struct lshpack_dec hdec;
     int s;
+#if LSQUIC_CONN_STATS
+    struct conn_stats conn_stats;
+    memset(&conn_stats, 0, sizeof(conn_stats));
+#endif
 
     lsquic_mm_init(&mm);
     lshpack_enc_init(&henc);
@@ -213,7 +221,11 @@ test_rw (unsigned max_frame_sz)
     stream->sm_max_sz = 1;
 
     fw = lsquic_frame_writer_new(&mm, stream, max_frame_sz, &henc,
-                                 stream_write, 0);
+                                 stream_write,
+#if LSQUIC_CONN_STATS
+                                 &conn_stats,
+#endif
+                                 0);
 
     struct lsquic_http_headers headers = {
         .count   = N_HEADERS,
@@ -229,7 +241,11 @@ test_rw (unsigned max_frame_sz)
         stream->sm_off = 0;
 
         fr = lsquic_frame_reader_new(0, 0, &mm, stream, read_from_stream, &hdec,
-                                &frame_callbacks, &uh, lsquic_http1x_if, NULL);
+                                &frame_callbacks, &uh,
+#if LSQUIC_CONN_STATS
+                                &conn_stats,
+#endif
+                                lsquic_http1x_if, NULL);
         do
         {
             s = lsquic_frame_reader_read(fr);

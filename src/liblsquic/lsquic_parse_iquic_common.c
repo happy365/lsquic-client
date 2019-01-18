@@ -1,4 +1,4 @@
-/* Copyright (c) 2017 - 2018 LiteSpeed Technologies Inc.  See LICENSE. */
+/* Copyright (c) 2017 - 2019 LiteSpeed Technologies Inc.  See LICENSE. */
 /*
  * Parsing routines shared by all IETF QUIC versions.
  */
@@ -170,7 +170,7 @@ lsquic_Q044_parse_packet_in_short_begin (lsquic_packet_in_t *packet_in,
 }
 
 
-const enum QUIC_FRAME_TYPE lsquic_iquic_byte2type[0x100] =
+const enum quic_frame_type lsquic_iquic_byte2type[0x100] =
 {
     [0x00] = QUIC_FRAME_PADDING,
     [0x01] = QUIC_FRAME_PING,

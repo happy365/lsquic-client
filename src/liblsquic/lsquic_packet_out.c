@@ -1,4 +1,4 @@
-/* Copyright (c) 2017 - 2018 LiteSpeed Technologies Inc.  See LICENSE. */
+/* Copyright (c) 2017 - 2019 LiteSpeed Technologies Inc.  See LICENSE. */
 /*
  * lsquic_packet_out.c
  */
@@ -36,7 +36,7 @@ static struct stream_rec *
 srec_one_posi_first (struct packet_out_srec_iter *posi,
                      struct lsquic_packet_out *packet_out)
 {
-    if (packet_out->po_srecs.one.sr_frame_types)
+    if (packet_out->po_srecs.one.sr_frame_type)
         return &packet_out->po_srecs.one;
     else
         return NULL;
@@ -58,7 +58,7 @@ srec_arr_posi_next (struct packet_out_srec_iter *posi)
         for (; posi->srec_idx < sizeof(posi->cur_srec_arr->srecs) / sizeof(posi->cur_srec_arr->srecs[0]);
                 ++posi->srec_idx)
         {
-            if (posi->cur_srec_arr->srecs[ posi->srec_idx ].sr_frame_types)
+            if (posi->cur_srec_arr->srecs[ posi->srec_idx ].sr_frame_type)
                 return &posi->cur_srec_arr->srecs[ posi->srec_idx++ ];
         }
         posi->cur_srec_arr = TAILQ_NEXT(posi->cur_srec_arr, next_stream_rec_arr);
@@ -111,61 +111,28 @@ posi_next (struct packet_out_srec_iter *posi)
 }
 
 
-/* Assumption: there can only be one STREAM and only one RST_STREAM frame
- * for a particular stream per packet.  The latter is true because a stream
- * will only send out one RST_STREAM frame.  The former is true because we
- * make sure only to place one STREAM frame from a particular stream into a
- * packet.
- *
+/*
  * Assumption: frames are added to the packet_out in order of their placement
- * in packet_out->po_data.  There is an assertion in this function that guards
- * for this.
+ * in packet_out->po_data.  There is no assertion to guard for for this.
  */
 int
 lsquic_packet_out_add_stream (lsquic_packet_out_t *packet_out,
                               struct lsquic_mm *mm,
                               struct lsquic_stream *new_stream,
-                              enum QUIC_FRAME_TYPE frame_type,
+                              enum quic_frame_type frame_type,
                               unsigned short off, unsigned short len)
 {
-    struct packet_out_srec_iter posi;
     struct stream_rec_arr *srec_arr;
-    struct stream_rec *srec;
     int last_taken;
     unsigned i;
 
     assert(!(new_stream->stream_flags & STREAM_FINISHED));
 
-    for (srec = posi_first(&posi, packet_out); srec; srec = posi_next(&posi))
-        if (srec->sr_stream == new_stream)
-        {
-            switch (frame_type)
-            {
-            case QUIC_FRAME_STREAM:
-            case QUIC_FRAME_CRYPTO:
-                assert(!(srec->sr_frame_types & (1 << frame_type)));
-                srec->sr_frame_types |= (1 << frame_type);
-                srec->sr_off         = off;
-                srec->sr_len         = len;
-                break;
-            default:
-                assert(QUIC_FRAME_RST_STREAM == frame_type);
-                assert(!(srec->sr_frame_types & (1 << QUIC_FRAME_RST_STREAM)));
-                srec->sr_frame_types |= (1 << QUIC_FRAME_RST_STREAM);
-                break;
-            }
-            return 0;                       /* Update existing record */
-        }
-        else if (srec->sr_frame_types & (QUIC_FTBIT_STREAM|QUIC_FTBIT_CRYPTO)
-                                                            & (1 << frame_type))
-            /* Check that STREAM and CRYPTO frames are added in order */
-            assert(srec->sr_off < off);
-
     if (!(packet_out->po_flags & PO_SREC_ARR))
     {
         if (!srec_taken(&packet_out->po_srecs.one))
         {
-            packet_out->po_srecs.one.sr_frame_types = (1 << frame_type);
+            packet_out->po_srecs.one.sr_frame_type  = frame_type;
             packet_out->po_srecs.one.sr_stream      = new_stream;
             packet_out->po_srecs.one.sr_off         = off;
             packet_out->po_srecs.one.sr_len         = len;
@@ -196,7 +163,7 @@ lsquic_packet_out_add_stream (lsquic_packet_out_t *packet_out,
     if (i < sizeof(srec_arr->srecs) / sizeof(srec_arr->srecs[0]))
     {
   set_elem:
-        srec_arr->srecs[i].sr_frame_types = (1 << frame_type);
+        srec_arr->srecs[i].sr_frame_type  = frame_type;
         srec_arr->srecs[i].sr_stream      = new_stream;
         srec_arr->srecs[i].sr_off         = off;
         srec_arr->srecs[i].sr_len         = len;
@@ -209,7 +176,7 @@ lsquic_packet_out_add_stream (lsquic_packet_out_t *packet_out,
         return -1;
 
     memset(srec_arr, 0, sizeof(*srec_arr));
-    srec_arr->srecs[0].sr_frame_types = (1 << frame_type);
+    srec_arr->srecs[0].sr_frame_type  = frame_type;
     srec_arr->srecs[0].sr_stream      = new_stream;
     srec_arr->srecs[0].sr_off         = off;
     srec_arr->srecs[0].sr_len         = len;
@@ -324,7 +291,7 @@ lsquic_packet_out_elide_reset_stream_frames (lsquic_packet_out_t *packet_out,
 
     for (srec = posi_first(&posi, packet_out); srec; srec = posi_next(&posi))
     {
-        if (srec->sr_frame_types & (1 << QUIC_FRAME_STREAM))
+        if (srec->sr_frame_type == QUIC_FRAME_STREAM)
         {
             ++n_stream_frames;
 
@@ -353,10 +320,8 @@ lsquic_packet_out_elide_reset_stream_frames (lsquic_packet_out_t *packet_out,
                         packet_out->po_data_sz - srec->sr_off - srec->sr_len);
                 packet_out->po_data_sz -= srec->sr_len;
 
-                /* See what we can do with the stream */
-                srec->sr_frame_types &= ~(1 << QUIC_FRAME_STREAM);
-                if (!srec_taken(srec))
-                    lsquic_stream_acked(srec->sr_stream, 1 << QUIC_FRAME_STREAM);
+                lsquic_stream_acked(srec->sr_stream, srec->sr_frame_type);
+                srec->sr_frame_type = 0;
             }
         }
     }
@@ -383,42 +348,8 @@ lsquic_packet_out_chop_regen (lsquic_packet_out_t *packet_out)
     packet_out->po_regen_sz = 0;
 
     for (srec = posi_first(&posi, packet_out); srec; srec = posi_next(&posi))
-        if (srec->sr_frame_types & (1 << QUIC_FRAME_STREAM))
+        if (srec->sr_frame_type == QUIC_FRAME_STREAM)
             srec->sr_off -= delta;
-}
-
-
-int
-lsquic_packet_out_has_frame (struct lsquic_packet_out *packet_out,
-                                const struct lsquic_stream *stream,
-                                    enum QUIC_FRAME_TYPE frame_type)
-{
-    struct packet_out_srec_iter posi;
-    struct stream_rec *srec;
-
-    for (srec = posi_first(&posi, packet_out); srec; srec = posi_next(&posi))
-        if (srec->sr_stream == stream &&
-                                    srec->sr_frame_types & (1 << frame_type))
-            return 1;
-
-    return 0;
-}
-
-
-int
-lsquic_packet_out_has_hsk_frames (struct lsquic_packet_out *packet_out)
-{
-    struct packet_out_srec_iter posi;
-    struct stream_rec *srec;
-
-    for (srec = posi_first(&posi, packet_out); srec; srec = posi_next(&posi))
-        if ((srec->sr_frame_types & (1 << QUIC_FRAME_STREAM))
-            && LSQUIC_GQUIC_STREAM_HANDSHAKE == srec->sr_stream->id)
-        {
-            return 1;
-        }
-
-    return 0;
 }
 
 
@@ -428,7 +359,7 @@ lsquic_packet_out_ack_streams (lsquic_packet_out_t *packet_out)
     struct packet_out_srec_iter posi;
     struct stream_rec *srec;
     for (srec = posi_first(&posi, packet_out); srec; srec = posi_next(&posi))
-        lsquic_stream_acked(srec->sr_stream, srec->sr_frame_types);
+        lsquic_stream_acked(srec->sr_stream, srec->sr_frame_type);
 }
 
 
@@ -448,7 +379,7 @@ split_off_last_frames (struct lsquic_mm *mm, lsquic_packet_out_t *packet_out,
                             srec->sr_stream, QUIC_FRAME_STREAM,
                             new_packet_out->po_data_sz, srec->sr_len))
             return -1;
-        srec->sr_frame_types &= ~(1 << QUIC_FRAME_STREAM);
+        srec->sr_frame_type = 0;
         assert(srec->sr_stream->n_unacked > 1);
         --srec->sr_stream->n_unacked;
         new_packet_out->po_data_sz += srec->sr_len;
@@ -478,7 +409,7 @@ move_largest_frame (struct lsquic_mm *mm, lsquic_packet_out_t *packet_out,
                         new_packet_out->po_data_sz, max_srec->sr_len))
         return -1;
 
-    max_srec->sr_frame_types &= ~(1 << QUIC_FRAME_STREAM);
+    max_srec->sr_frame_type = 0;
     assert(max_srec->sr_stream->n_unacked > 1);
     --max_srec->sr_stream->n_unacked;
     new_packet_out->po_data_sz += max_srec->sr_len;
@@ -622,7 +553,7 @@ verify_srecs (lsquic_packet_out_t *packet_out)
     for ( ; srec; srec = posi_next(&posi))
     {
         assert(srec->sr_off == off);
-        assert(srec->sr_frame_types & (1 << QUIC_FRAME_STREAM));
+        assert(srec->sr_frame_type == QUIC_FRAME_STREAM);
         off += srec->sr_len;
     }
 
@@ -661,7 +592,7 @@ lsquic_packet_out_split_in_two (struct lsquic_mm *mm,
     for (srec = posi_first(&posi, packet_out); srec; srec = posi_next(&posi))
     {
         /* We only expect references to STREAM frames (buffered packets): */
-        assert(srec->sr_frame_types == (1 << QUIC_FRAME_STREAM));
+        assert(srec->sr_frame_type == QUIC_FRAME_STREAM);
         if (n_srecs >= n_srecs_alloced)
         {
             n_srecs_alloced *= 2;
@@ -796,7 +727,7 @@ lsquic_packet_out_turn_on_fin (struct lsquic_packet_out *packet_out,
     int len;
 
     for (srec = posi_first(&posi, packet_out); srec; srec = posi_next(&posi))
-        if ((srec->sr_frame_types & (1 << QUIC_FRAME_STREAM))
+        if (srec->sr_frame_type == QUIC_FRAME_STREAM
             && srec->sr_stream == stream)
         {
             len = pf->pf_parse_stream_frame(packet_out->po_data + srec->sr_off,

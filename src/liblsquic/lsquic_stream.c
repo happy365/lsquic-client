@@ -1,4 +1,4 @@
-/* Copyright (c) 2017 - 2018 LiteSpeed Technologies Inc.  See LICENSE. */
+/* Copyright (c) 2017 - 2019 LiteSpeed Technologies Inc.  See LICENSE. */
 /*
  * lsquic_stream.c -- stream processing
  *
@@ -2341,6 +2341,9 @@ write_stream_frame (struct frame_gen_ctx *fg_ctx, const size_t size,
     unsigned off;
     int len, s;
 
+#if LSQUIC_CONN_STATS
+    const uint64_t begin_off = stream->tosend_off;
+#endif
     off = packet_out->po_data_sz;
     len = pf->pf_gen_stream_frame(
                 packet_out->po_data + packet_out->po_data_sz,
@@ -2350,6 +2353,11 @@ write_stream_frame (struct frame_gen_ctx *fg_ctx, const size_t size,
     if (len < 0)
         return len;
 
+#if LSQUIC_CONN_STATS
+    stream->conn_pub->conn_stats->out.stream_frames += 1;
+    stream->conn_pub->conn_stats->out.stream_data_sz
+                                            += stream->tosend_off - begin_off;
+#endif
     EV_LOG_GENERATED_STREAM_FRAME(LSQUIC_LOG_CONN_ID, pf,
                             packet_out->po_data + packet_out->po_data_sz, len);
     lsquic_send_ctl_incr_pack_sz(send_ctl, packet_out, len);
@@ -2405,6 +2413,27 @@ stream_write_to_packet_std (struct frame_gen_ctx *fg_ctx, const size_t size)
     unsigned stream_header_sz, need_at_least;
     struct lsquic_packet_out *packet_out;
     int len;
+
+    if ((stream->stream_flags &
+                    (STREAM_IETF|STREAM_HEADERS_SENT|STREAM_HDRS_FLUSHED))
+                                                        == STREAM_HEADERS_SENT
+        && lsquic_send_ctl_buffered_and_same_prio_as_headers(send_ctl, stream))
+    {
+        /* TODO: make this logic work for IETF streams as well XXX */
+        struct lsquic_stream *const headers_stream
+                = lsquic_headers_stream_get_stream(stream->conn_pub->u.gquic.hs);
+        if (lsquic_stream_has_data_to_flush(headers_stream))
+        {
+            LSQ_DEBUG("flushing headers stream before potential write to a "
+                                                            "buffered packet");
+            (void) lsquic_stream_flush(headers_stream);
+        }
+        else
+            /* Some other stream must have flushed it: this means our headers
+             * are flushed.
+             */
+            stream->stream_flags |= STREAM_HDRS_FLUSHED;
+    }
 
     stream_header_sz = stream->sm_frame_header_sz(stream, size);
     need_at_least = stream_header_sz + (size > 0);
@@ -3139,12 +3168,13 @@ __attribute__((weak))
 #endif
 #endif
 void
-lsquic_stream_acked (struct lsquic_stream *stream, enum quic_ft_bit frame_types)
+lsquic_stream_acked (struct lsquic_stream *stream,
+                                            enum quic_frame_type frame_type)
 {
     assert(stream->n_unacked);
     --stream->n_unacked;
     LSQ_DEBUG("ACKed; n_unacked: %u", stream->n_unacked);
-    if (frame_types & QUIC_FTBIT_RST_STREAM)
+    if (frame_type == QUIC_FRAME_RST_STREAM)
     {
         SM_HISTORY_APPEND(stream, SHE_RST_ACKED);
         LSQ_DEBUG("RESET that we sent has been acked by peer");

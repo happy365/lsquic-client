@@ -1,4 +1,4 @@
-/* Copyright (c) 2017 - 2018 LiteSpeed Technologies Inc.  See LICENSE. */
+/* Copyright (c) 2017 - 2019 LiteSpeed Technologies Inc.  See LICENSE. */
 /*
  * lsquic_frame_writer.c -- write frames to HEADERS stream.
  *
@@ -21,6 +21,9 @@
 #include "lshpack.h"
 #include "lsquic_mm.h"
 #include "lsquic.h"
+#include "lsquic_int_types.h"
+#include "lsquic_hash.h"
+#include "lsquic_conn.h"
 
 #include "lsquic_frame_writer.h"
 #include "lsquic_frame_common.h"
@@ -39,6 +42,9 @@ struct lsquic_frame_writer
     fw_writef_f                 fw_writef;
     struct lsquic_mm           *fw_mm;
     struct lshpack_enc         *fw_henc;
+#if LSQUIC_CONN_STATS
+    struct conn_stats          *fw_conn_stats;
+#endif
     struct frab_list            fw_fral;
     unsigned                    fw_max_frame_sz;
     uint32_t                    fw_max_header_list_sz;  /* 0 means unlimited */
@@ -67,6 +73,9 @@ fw_alloc (void *ctx, size_t size)
 struct lsquic_frame_writer *
 lsquic_frame_writer_new (struct lsquic_mm *mm, struct lsquic_stream *stream,
      unsigned max_frame_sz, struct lshpack_enc *henc, fw_writef_f writef,
+#if LSQUIC_CONN_STATS
+     struct conn_stats *conn_stats,
+#endif
      int is_server)
 {
     struct lsquic_frame_writer *fw;
@@ -104,6 +113,9 @@ lsquic_frame_writer_new (struct lsquic_mm *mm, struct lsquic_stream *stream,
         fw->fw_flags    = FW_SERVER;
     else
         fw->fw_flags    = 0;
+#if LSQUIC_CONN_STATS
+    fw->fw_conn_stats   = conn_stats;
+#endif
     lsquic_frab_list_init(&fw->fw_fral, 0x1000, fw_alloc,
         (void (*)(void *, void *)) lsquic_mm_put_4k, mm);
     return fw;
@@ -368,13 +380,20 @@ write_headers (struct lsquic_frame_writer *fw,
     for (i = 0; i < headers->count; ++i)
     {
         end = lshpack_enc_encode(fw->fw_henc, buf, buf + buf_sz,
-            headers->headers[i].name.iov_base, headers->headers[i].name.iov_len,
-            headers->headers[i].value.iov_base, headers->headers[i].value.iov_len, 0);
+                                 LSHPACK_HDR_UNKNOWN,
+                                 (const lshpack_header_t *)&headers->headers[i],
+                                 0);
         if (end > buf)
         {
             s = hfc_write(hfc, buf, end - buf);
             if (s < 0)
                 return s;
+#if LSQUIC_CONN_STATS
+            fw->fw_conn_stats->out.headers_uncomp +=
+                headers->headers[i].name.iov_len
+                    + headers->headers[i].value.iov_len;
+            fw->fw_conn_stats->out.headers_comp += end - buf;
+#endif
         }
         else
         {

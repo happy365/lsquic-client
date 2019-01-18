@@ -1,4 +1,4 @@
-/* Copyright (c) 2017 - 2018 LiteSpeed Technologies Inc.  See LICENSE. */
+/* Copyright (c) 2017 - 2019 LiteSpeed Technologies Inc.  See LICENSE. */
 /*
  * lsquic_spi.c - implementation of Stream Priority Iterator.
  */
@@ -51,9 +51,11 @@ add_stream_to_spi (struct stream_prio_iter *iter, lsquic_stream_t *stream)
 
 void
 lsquic_spi_init (struct stream_prio_iter *iter, struct lsquic_stream *first,
-        struct lsquic_stream *last, uintptr_t next_ptr_offset,
-        enum stream_q_flags onlist_mask, const struct lsquic_conn *conn,
-        const char *name)
+         struct lsquic_stream *last, uintptr_t next_ptr_offset,
+         enum stream_q_flags onlist_mask, const struct lsquic_conn *conn,
+         const char *name,
+         int (*filter)(void *filter_ctx, struct lsquic_stream *),
+         void *filter_ctx)
 {
     struct lsquic_stream *stream;
     unsigned count;
@@ -72,14 +74,27 @@ lsquic_spi_init (struct stream_prio_iter *iter, struct lsquic_stream *first,
     stream = first;
     count = 0;
 
-    while (1)
-    {
-        add_stream_to_spi(iter, stream);
-        ++count;
-        if (stream == last)
-            break;
-        stream = NEXT_STREAM(stream, next_ptr_offset);
-    }
+    if (filter)
+        while (1)
+        {
+            if (filter(filter_ctx, stream))
+            {
+                add_stream_to_spi(iter, stream);
+                ++count;
+            }
+            if (stream == last)
+                break;
+            stream = NEXT_STREAM(stream, next_ptr_offset);
+        }
+    else
+        while (1)
+        {
+            add_stream_to_spi(iter, stream);
+            ++count;
+            if (stream == last)
+                break;
+            stream = NEXT_STREAM(stream, next_ptr_offset);
+        }
 
     if (count > 2)
         SPI_DEBUG("initialized; # elems: %u; sets: [ %016"PRIX64", %016"PRIX64

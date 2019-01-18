@@ -1,4 +1,4 @@
-/* Copyright (c) 2017 - 2018 LiteSpeed Technologies Inc.  See LICENSE. */
+/* Copyright (c) 2017 - 2019 LiteSpeed Technologies Inc.  See LICENSE. */
 #include <assert.h>
 #include <errno.h>
 #include <stdio.h>
@@ -207,13 +207,13 @@ read_from_scheduled_packets (lsquic_send_ctl_t *send_ctl, lsquic_stream_id_t str
     struct packet_out_srec_iter posi;
     struct lsquic_packet_out *packet_out;
     struct stream_frame frame;
-    enum quic_ft_bit expected_bit;
+    enum quic_frame_type expected_type;
     int len, fin = 0;
 
     if (g_use_crypto_ctor)
-        expected_bit = QUIC_FTBIT_CRYPTO;
+        expected_type = QUIC_FRAME_CRYPTO;
     else
-        expected_bit = QUIC_FTBIT_STREAM;
+        expected_type = QUIC_FRAME_STREAM;
 
     TAILQ_FOREACH(packet_out, &send_ctl->sc_scheduled_packets, po_next)
         for (srec = posi_first(&posi, packet_out); srec;
@@ -221,7 +221,7 @@ read_from_scheduled_packets (lsquic_send_ctl_t *send_ctl, lsquic_stream_id_t str
         {
             if (fullcheck)
             {
-                assert(srec->sr_frame_types & expected_bit);
+                assert(srec->sr_frame_type == expected_type);
                 if (packet_out->po_packno != 1)
                 {
                     /* First packet may contain two stream frames, do not
@@ -235,18 +235,18 @@ read_from_scheduled_packets (lsquic_send_ctl_t *send_ctl, lsquic_stream_id_t str
                     }
                 }
             }
-            if ((srec->sr_frame_types & expected_bit) &&
+            if (srec->sr_frame_type == expected_type &&
                                             srec->sr_stream->id == stream_id)
             {
                 assert(!fin);
-                if (QUIC_FTBIT_STREAM == expected_bit)
+                if (QUIC_FRAME_STREAM == expected_type)
                     len = pf_local->pf_parse_stream_frame(packet_out->po_data + srec->sr_off,
                         packet_out->po_data_sz - srec->sr_off, &frame);
                 else
                     len = pf_local->pf_parse_crypto_frame(packet_out->po_data + srec->sr_off,
                         packet_out->po_data_sz - srec->sr_off, &frame);
                 assert(len > 0);
-                if (QUIC_FTBIT_STREAM == expected_bit)
+                if (QUIC_FRAME_STREAM == expected_type)
                     assert(frame.stream_id == srec->sr_stream->id);
                 else
                     assert(frame.stream_id == ~0ULL);
@@ -291,6 +291,19 @@ struct test_objs {
 };
 
 
+static int
+unit_test_doesnt_write_ack (struct lsquic_conn *lconn)
+{
+    return 0;
+}
+
+
+static const struct conn_iface our_conn_if =
+{
+    .ci_can_write_ack = unit_test_doesnt_write_ack,
+};
+
+
 static void
 init_test_objs (struct test_objs *tobjs, unsigned initial_conn_window,
                 unsigned initial_stream_window, const struct parse_funcs *pf)
@@ -303,6 +316,7 @@ init_test_objs (struct test_objs *tobjs, unsigned initial_conn_window,
         LSQVER_ID17 : LSQVER_043;
     tobjs->lconn.cn_esf_c = &lsquic_enc_session_common_gquic_1;
     tobjs->lconn.cn_pack_size = 1370;
+    tobjs->lconn.cn_if = &our_conn_if;
     lsquic_mm_init(&tobjs->eng_pub.enp_mm);
     TAILQ_INIT(&tobjs->conn_pub.sending_streams);
     TAILQ_INIT(&tobjs->conn_pub.read_streams);
@@ -953,7 +967,7 @@ test_loc_RST_rem_FIN (struct test_objs *tobjs)
 
     sss = lsquic_stream_sending_state(stream);
     assert(SSS_RESET_SENT == sss);
-    lsquic_stream_acked(stream, QUIC_FTBIT_RST_STREAM); /* Fake ack of RST_STREAM packet */
+    lsquic_stream_acked(stream, QUIC_FRAME_RST_STREAM); /* Fake ack of RST_STREAM packet */
     sss = lsquic_stream_sending_state(stream);
     assert(SSS_RESET_RECVD == sss);
 
@@ -1979,8 +1993,8 @@ test_writing_to_stream_schedule_stream_packets_immediately (void)
     assert(("9 bytes written correctly", nw == 9));
     s = lsquic_stream_flush(stream);
     assert(0 == s);
-    assert(("packetized -- 2 packets now",
-                        2 == lsquic_send_ctl_n_scheduled(&tobjs.send_ctl)));
+    assert(("packetized -- still 1 packet",
+                        1 == lsquic_send_ctl_n_scheduled(&tobjs.send_ctl)));
 
     assert(("connection cap is reduced by 23 bytes",
                     lsquic_conn_cap_avail(conn_cap) == 0x4000 - 23));
@@ -2042,7 +2056,7 @@ test_writing_to_stream_outside_callback (void)
     assert(("9 bytes written correctly", nw == 9));
     s = lsquic_stream_flush(stream);
     assert(0 == s);
-    assert(("packetized -- 2 packets now", 2 == bpq->bpq_count));
+    assert(("packetized -- still 1 packet", 1 == bpq->bpq_count));
 
     assert(("connection cap is reduced by 23 bytes",
                     lsquic_conn_cap_avail(conn_cap) == 0x4000 - 23));
@@ -2051,8 +2065,8 @@ test_writing_to_stream_outside_callback (void)
     g_ctl_settings.tcs_schedule_stream_packets_immediately = 1;
     lsquic_send_ctl_schedule_buffered(&tobjs.send_ctl,
                                                 g_ctl_settings.tcs_bp_type);
-    assert(("packetized -- 2 packets now",
-                        2 == lsquic_send_ctl_n_scheduled(&tobjs.send_ctl)));
+    assert(("packetized -- 1 packet",
+                        1 == lsquic_send_ctl_n_scheduled(&tobjs.send_ctl)));
 
     nw = read_from_scheduled_packets(&tobjs.send_ctl, stream->id, buf,
                                                     sizeof(buf), 0, NULL, 0);

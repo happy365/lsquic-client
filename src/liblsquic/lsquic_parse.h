@@ -1,4 +1,4 @@
-/* Copyright (c) 2017 - 2018 LiteSpeed Technologies Inc.  See LICENSE. */
+/* Copyright (c) 2017 - 2019 LiteSpeed Technologies Inc.  See LICENSE. */
 #ifndef LSQUIC_PARSE_H
 #define LSQUIC_PARSE_H 1
 
@@ -87,7 +87,7 @@ struct parse_funcs
     void
     (*pf_parse_packet_in_finish) (struct lsquic_packet_in *packet_in,
                                                 struct packin_parse_state *);
-    enum QUIC_FRAME_TYPE
+    enum quic_frame_type
     (*pf_parse_frame_type) (unsigned char);
     /* Return used buffer length or a negative value if there was not enough
      * room to write the stream frame.  In the latter case, the negative of
@@ -291,10 +291,10 @@ int
 lsquic_Q044_parse_packet_in_long_begin (struct lsquic_packet_in *, size_t length,
                 int is_server, unsigned, struct packin_parse_state *);
 
-enum QUIC_FRAME_TYPE
+enum quic_frame_type
 parse_frame_type_gquic_Q035_thru_Q039 (unsigned char first_byte);
 
-extern const enum QUIC_FRAME_TYPE lsquic_iquic_byte2type[0x100];
+extern const enum quic_frame_type lsquic_iquic_byte2type[0x100];
 
 size_t
 calc_stream_frame_header_sz_gquic (lsquic_stream_id_t stream_id,

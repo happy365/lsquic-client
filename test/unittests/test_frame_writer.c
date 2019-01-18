@@ -1,4 +1,4 @@
-/* Copyright (c) 2017 - 2018 LiteSpeed Technologies Inc.  See LICENSE. */
+/* Copyright (c) 2017 - 2019 LiteSpeed Technologies Inc.  See LICENSE. */
 #include <assert.h>
 #include <errno.h>
 #include <stdio.h>
@@ -17,6 +17,14 @@
 #include "lsquic_conn.h"
 #include "lsquic_frame_common.h"
 #include "lsquic_frame_writer.h"
+#if LSQUIC_CONN_STATS
+#include "lsquic_int_types.h"
+#include "lsquic_conn.h"
+#endif
+
+#if LSQUIC_CONN_STATS
+static struct conn_stats s_conn_stats;
+#endif
 
 
 static struct {
@@ -71,11 +79,19 @@ test_max_frame_size (void)
     for (max_size = 1; max_size < 6 /* one settings frame */; ++max_size)
     {
         fw = lsquic_frame_writer_new(&mm, NULL, max_size, &henc,
-                                     output_write, 0);
+                                     output_write,
+#if LSQUIC_CONN_STATS
+                                     &s_conn_stats,
+#endif
+                                     0);
         assert(!fw);
     }
 
-    fw = lsquic_frame_writer_new(&mm, NULL, max_size, &henc, output_write, 0);
+    fw = lsquic_frame_writer_new(&mm, NULL, max_size, &henc, output_write,
+#if LSQUIC_CONN_STATS
+                                     &s_conn_stats,
+#endif
+                                0);
     assert(fw);
 
     lsquic_frame_writer_destroy(fw);
@@ -94,7 +110,11 @@ test_one_header (void)
 
     lshpack_enc_init(&henc);
     lsquic_mm_init(&mm);
-    fw = lsquic_frame_writer_new(&mm, NULL, 0x200, &henc, output_write, 0);
+    fw = lsquic_frame_writer_new(&mm, NULL, 0x200, &henc, output_write,
+#if LSQUIC_CONN_STATS
+                                     &s_conn_stats,
+#endif
+                                0);
     reset_output(0);
 
     struct lsquic_http_header header_arr[] =
@@ -154,7 +174,11 @@ test_oversize_header (void)
 
     lshpack_enc_init(&henc);
     lsquic_mm_init(&mm);
-    fw = lsquic_frame_writer_new(&mm, NULL, 0x200, &henc, output_write, 0);
+    fw = lsquic_frame_writer_new(&mm, NULL, 0x200, &henc, output_write,
+#if LSQUIC_CONN_STATS
+                                     &s_conn_stats,
+#endif
+                                0);
     reset_output(0);
 
     value = malloc(big_len);
@@ -192,7 +216,11 @@ test_continuations (void)
 
     lshpack_enc_init(&henc);
     lsquic_mm_init(&mm);
-    fw = lsquic_frame_writer_new(&mm, NULL, 6, &henc, output_write, 0);
+    fw = lsquic_frame_writer_new(&mm, NULL, 6, &henc, output_write,
+#if LSQUIC_CONN_STATS
+                                 &s_conn_stats,
+#endif
+                                0);
     reset_output(0);
 
 /*
@@ -277,7 +305,11 @@ test_settings_short (void)
     struct lsquic_mm mm;
 
     lsquic_mm_init(&mm);
-    fw = lsquic_frame_writer_new(&mm, NULL, 7, NULL, output_write, 0);
+    fw = lsquic_frame_writer_new(&mm, NULL, 7, NULL, output_write,
+#if LSQUIC_CONN_STATS
+                                     &s_conn_stats,
+#endif
+                                0);
 
     {
         reset_output(0);
@@ -321,7 +353,11 @@ test_settings_normal (void)
     struct lsquic_mm mm;
 
     lsquic_mm_init(&mm);
-    fw = lsquic_frame_writer_new(&mm, NULL, 0, NULL, output_write, 0);
+    fw = lsquic_frame_writer_new(&mm, NULL, 0, NULL, output_write,
+#if LSQUIC_CONN_STATS
+                                     &s_conn_stats,
+#endif
+                                    0);
 
     {
         reset_output(0);
@@ -374,7 +410,11 @@ test_priority (void)
     struct lsquic_mm mm;
 
     lsquic_mm_init(&mm);
-    fw = lsquic_frame_writer_new(&mm, NULL, 6, NULL, output_write, 0);
+    fw = lsquic_frame_writer_new(&mm, NULL, 6, NULL, output_write,
+#if LSQUIC_CONN_STATS
+                                 &s_conn_stats,
+#endif
+                                0);
 
     s = lsquic_frame_writer_write_priority(fw, 3, 0, 1UL << 31, 256);
     assert(s < 0);  /* Invalid dependency stream ID */
@@ -433,7 +473,11 @@ test_errors (void)
 
     lshpack_enc_init(&henc);
     lsquic_mm_init(&mm);
-    fw = lsquic_frame_writer_new(&mm, NULL, 0x200, &henc, output_write, 1);
+    fw = lsquic_frame_writer_new(&mm, NULL, 0x200, &henc, output_write,
+#if LSQUIC_CONN_STATS
+                                     &s_conn_stats,
+#endif
+                                1);
     reset_output(0);
 
     {
@@ -483,7 +527,11 @@ test_push_promise (void)
 
     lshpack_enc_init(&henc);
     lsquic_mm_init(&mm);
-    fw = lsquic_frame_writer_new(&mm, NULL, 0x200, &henc, output_write, 1);
+    fw = lsquic_frame_writer_new(&mm, NULL, 0x200, &henc, output_write,
+#if LSQUIC_CONN_STATS
+                                     &s_conn_stats,
+#endif
+                                1);
     reset_output(0);
 
 /*
