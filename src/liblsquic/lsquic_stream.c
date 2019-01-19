@@ -336,6 +336,12 @@ stream_new_common (lsquic_stream_id_t id, struct lsquic_conn_public *conn_pub,
         return NULL;
     }
 
+    stream->id        = id;
+    stream->stream_if = stream_if;
+    stream->conn_pub  = conn_pub;
+    stream->sm_onnew_arg = stream_if_ctx;
+    stream->sm_write_avail = stream_write_avail;
+
     if ((ctor_flags & (SCF_IETF|SCF_CRITICAL)) == SCF_IETF)
     {
         if (0 == lsquic_prio_tree_add_stream(conn_pub->u.ietf.prio_tree,
@@ -348,12 +354,6 @@ stream_new_common (lsquic_stream_id_t id, struct lsquic_conn_public *conn_pub,
             return NULL;
         }
     }
-
-    stream->stream_if = stream_if;
-    stream->id        = id;
-    stream->conn_pub  = conn_pub;
-    stream->sm_onnew_arg = stream_if_ctx;
-    stream->sm_write_avail = stream_write_avail;
 
     if (ctor_flags & SCF_DI_AUTOSWITCH)
         stream->stream_flags |= STREAM_AUTOSWITCH;
