@@ -3587,6 +3587,9 @@ hq_filter_readable (struct lsquic_stream *stream)
     struct hq_filter *const filter = &stream->sm_hq_filter;
     struct read_frames_status rfs;
 
+    if (filter->hqfi_flags & HQFI_FLAG_BLOCKED)
+        return 0;
+
     if (!hq_filter_readable_now(stream))
     {
         rfs = read_data_frames(stream, 0, hq_read, stream);
@@ -3755,4 +3758,17 @@ lsquic_stream_receiving_state (struct lsquic_stream *stream)
         return SSR_RESET_READ;
     else
         return SSR_RESET_RECVD;
+}
+
+
+void
+lsquic_stream_qdec_unblocked (struct lsquic_stream *stream)
+{
+    struct hq_filter *const filter = &stream->sm_hq_filter;
+
+    assert(stream->sm_qflags & SMQF_QPACK_DEC);
+    assert(filter->hqfi_flags & HQFI_FLAG_BLOCKED);
+
+    filter->hqfi_flags &= ~HQFI_FLAG_BLOCKED;
+    LSQ_DEBUG("QPACK decoder unblocked");
 }

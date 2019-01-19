@@ -320,7 +320,7 @@ qdh_hblock_unblocked (void *stream_p)
     struct qpack_dec_hdl *const qdh = lsquic_stream_get_qdh(stream);
 
     LSQ_DEBUG("header block for stream %"PRIu64" unblocked", stream->id);
-    (void) lsquic_stream_wantread(stream, 1);
+    lsquic_stream_qdec_unblocked(stream);
 }
 
 

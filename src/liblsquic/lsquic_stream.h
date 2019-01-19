@@ -498,4 +498,7 @@ lsquic_stream_fc_recv_off_const (const struct lsquic_stream *);
 void
 lsquic_stream_max_stream_data_sent (struct lsquic_stream *);
 
+void
+lsquic_stream_qdec_unblocked (struct lsquic_stream *);
+
 #endif
