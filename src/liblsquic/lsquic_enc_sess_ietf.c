@@ -564,7 +564,7 @@ init_client (struct enc_sess_iquic *const enc_sess)
         goto err;
     }
     if (0 != SSL_set_alpn_protos(enc_sess->esi_ssl,
-            (unsigned char []) { 5, 'h', 'q', '-', '1', '7', }, 6))
+            (unsigned char []) { 5, 'h', '3', '-', '1', '7', }, 6))
     {
         LSQ_ERROR("cannot set ALPN: %s",
             ERR_error_string(ERR_get_error(), errbuf));
