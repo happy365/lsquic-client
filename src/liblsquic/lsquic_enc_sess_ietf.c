@@ -172,6 +172,7 @@ struct enc_sess_iquic
     enum header_type     esi_header_type;
     enum enc_level       esi_last_w;
     char                *esi_hostname;
+    void                *esi_keylog_handle;
 };
 
 
@@ -515,6 +516,31 @@ setup_handshake_keys (struct enc_sess_iquic *enc_sess, const lsquic_cid_t *cid)
 }
 
 
+static void
+keylog_callback (const SSL *ssl, const char *line)
+{
+    struct enc_sess_iquic *enc_sess;
+
+    enc_sess = SSL_get_app_data(ssl);
+    if (enc_sess->esi_keylog_handle)
+        enc_sess->esi_enpub->enp_kli->kli_log_line(
+                                        enc_sess->esi_keylog_handle, line);
+}
+
+
+static void
+maybe_setup_key_logging (struct enc_sess_iquic *enc_sess)
+{
+    if (enc_sess->esi_enpub->enp_kli)
+    {
+        enc_sess->esi_keylog_handle = enc_sess->esi_enpub->enp_kli->kli_open(
+                        enc_sess->esi_enpub->enp_kli_ctx, enc_sess->esi_conn);
+        LSQ_DEBUG("SSL keys %s be logged",
+                            enc_sess->esi_keylog_handle ? "will" : "will not");
+    }
+}
+
+
 static int
 init_client (struct enc_sess_iquic *const enc_sess)
 {
@@ -534,6 +560,8 @@ init_client (struct enc_sess_iquic *const enc_sess)
     SSL_CTX_set_min_proto_version(ssl_ctx, TLS1_3_VERSION);
     SSL_CTX_set_max_proto_version(ssl_ctx, TLS1_3_VERSION);
     SSL_CTX_set_default_verify_paths(ssl_ctx);
+    if (enc_sess->esi_enpub->enp_kli)
+        SSL_CTX_set_keylog_callback(ssl_ctx, keylog_callback);
 
     transpa_len = gen_trans_params(enc_sess, trans_params,
                                                     sizeof(trans_params));
@@ -556,6 +584,7 @@ init_client (struct enc_sess_iquic *const enc_sess)
         LSQ_INFO("could not set stream method");
         goto err;
     }
+    maybe_setup_key_logging(enc_sess);
     if (1 != SSL_set_quic_transport_params(enc_sess->esi_ssl, trans_params,
                                                             transpa_len))
     {
@@ -781,6 +810,8 @@ iquic_esfi_destroy (enc_session_t *enc_session_p)
 {
     struct enc_sess_iquic *const enc_sess = enc_session_p;
     LSQ_DEBUG("destroy client handshake object");
+    if (enc_sess->esi_keylog_handle)
+        enc_sess->esi_enpub->enp_kli->kli_close(enc_sess->esi_keylog_handle);
     if (enc_sess->esi_ssl)
         SSL_free(enc_sess->esi_ssl);
     free(enc_sess->esi_hostname);

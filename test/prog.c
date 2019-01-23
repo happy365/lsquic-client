@@ -5,9 +5,13 @@
 #include <netinet/in.h>
 #include <signal.h>
 #endif
+#include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 #include <sys/queue.h>
 #ifndef WIN32
 #include <unistd.h>
@@ -21,6 +25,8 @@
 #include <lsquic.h>
 
 #include "../src/liblsquic/lsquic_hash.h"
+#include "../src/liblsquic/lsquic_int_types.h"
+#include "../src/liblsquic/lsquic_util.h"
 #include "../src/liblsquic/lsquic_logger.h"
 
 #include "test_config.h"
@@ -150,6 +156,12 @@ prog_print_common_options (const struct prog *prog, FILE *out)
             );
     }
 
+#ifndef WIN32
+    fprintf(out,
+"   -G dir      SSL keys will be logged to files in this directory.\n"
+    );
+#endif
+
 
     fprintf(out,
 "   -h          Print this help screen and exit\n"
@@ -160,6 +172,9 @@ prog_print_common_options (const struct prog *prog, FILE *out)
 int
 prog_set_opt (struct prog *prog, int opt, const char *arg)
 {
+    struct stat st;
+    int s;
+
     switch (opt)
     {
 #if LSQUIC_DONTFRAG_SUPPORTED
@@ -232,6 +247,32 @@ prog_set_opt (struct prog *prog, int opt, const char *arg)
                 return -1;
             }
         }
+    case 'G':
+#ifndef WIN32
+        if (0 == stat(optarg, &st))
+        {
+            if (!S_ISDIR(st.st_mode))
+            {
+                LSQ_ERROR("%s is not a directory", optarg);
+                return -1;
+            }
+        }
+        else
+        {
+            s = mkdir(optarg, 0700);
+            if (s != 0)
+            {
+                LSQ_ERROR("cannot create directory %s: %s", optarg,
+                                                        strerror(errno));
+                return -1;
+            }
+        }
+        prog->prog_keylog_dir = optarg;
+        return 0;
+#else
+        LSQ_ERROR("key logging is not supported on Windows");
+        return -1;
+#endif
     default:
         return 1;
     }
@@ -374,11 +415,73 @@ prog_stop (struct prog *prog)
 }
 
 
+static void *
+keylog_open (void *ctx, lsquic_conn_t *conn)
+{
+    const struct prog *const prog = ctx;
+    const lsquic_cid_t *cid;
+    FILE *fh;
+    int sz;
+    char id_str[MAX_CID_LEN * 2 + 1];
+    char path[PATH_MAX];
+
+    cid = lsquic_conn_id(conn);
+    lsquic_hexstr(cid->idbuf, cid->len, id_str, sizeof(id_str));
+    sz = snprintf(path, sizeof(path), "%s/%s.keys", prog->prog_keylog_dir,
+                                                                    id_str);
+    if ((size_t) sz >= sizeof(path))
+    {
+        LSQ_WARN("%s: file too long", __func__);
+        return NULL;
+    }
+    fh = fopen(path, "w");
+    if (!fh)
+        LSQ_WARN("could not open %s for writing: %s", path, strerror(errno));
+    return fh;
+}
+
+
+static void
+keylog_log_line (void *handle, const char *line)
+{
+    size_t len;
+
+    len = strlen(line);
+    if (len < sizeof("QUIC_") - 1 || strncmp(line, "QUIC_", 5))
+        fputs("QUIC_", handle);
+    fputs(line, handle);
+    fputs("\n", handle);
+    fflush(handle);
+}
+
+
+static void
+keylog_close (void *handle)
+{
+    fclose(handle);
+}
+
+
+static const struct lsquic_keylog_if keylog_if =
+{
+    .kli_open       = keylog_open,
+    .kli_log_line   = keylog_log_line,
+    .kli_close      = keylog_close,
+};
+
+
+
 int
 prog_prep (struct prog *prog)
 {
     int s;
     char err_buf[100];
+
+    if (prog->prog_keylog_dir)
+    {
+        prog->prog_api.ea_keylog_if = &keylog_if;
+        prog->prog_api.ea_keylog_ctx = prog;
+    }
 
     if (0 != lsquic_engine_check_settings(prog->prog_api.ea_settings,
                         prog->prog_engine_flags, err_buf, sizeof(err_buf)))

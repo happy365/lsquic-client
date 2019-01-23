@@ -29,6 +29,7 @@ struct prog
     struct lsquic_engine           *prog_engine;
     const char                     *prog_hostname;
     int                             prog_ipver;     /* 0, 4, or 6 */
+    const char                     *prog_keylog_dir;
 };
 
 void
@@ -41,7 +42,7 @@ prog_init (struct prog *, unsigned lsquic_engine_flags, struct sport_head *,
 #   define IP_DONTFRAG_FLAG ""
 #endif
 
-#define PROG_OPTS "m:c:y:L:l:o:H:s:S:Y:z:" IP_DONTFRAG_FLAG
+#define PROG_OPTS "m:c:y:L:l:o:H:s:S:Y:z:G:" IP_DONTFRAG_FLAG
 
 /* Returns:
  *  0   Applied

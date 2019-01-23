@@ -766,6 +766,26 @@ struct lsquic_hset_if
     void                (*hsi_discard_header_set)(void *hdr_set);
 };
 
+/**
+ * SSL keylog interface.
+ */
+struct lsquic_keylog_if
+{
+    /** Return keylog handle or NULL if no key logging is desired */
+    void *    (*kli_open) (void *keylog_ctx, lsquic_conn_t *);
+
+    /**
+     * Log line.  The first argument is the pointer returned by
+     * @ref kli_open.
+     */
+    void      (*kli_log_line) (void *handle, const char *line);
+
+    /**
+     * Close handle.
+     */
+    void      (*kli_close) (void *handle);
+};
+
 /* TODO: describe this important data structure */
 typedef struct lsquic_engine_api
 {
@@ -808,6 +828,12 @@ typedef struct lsquic_engine_api
      */
     void /* FILE, really */             *ea_stats_fh;
 #endif
+
+    /**
+     * Optional SSL key logging interface.
+     */
+    const struct lsquic_keylog_if       *ea_keylog_if;
+    void                                *ea_keylog_ctx;
 } lsquic_engine_api_t;
 
 /**
