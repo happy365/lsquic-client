@@ -3770,5 +3770,6 @@ lsquic_stream_qdec_unblocked (struct lsquic_stream *stream)
     assert(filter->hqfi_flags & HQFI_FLAG_BLOCKED);
 
     filter->hqfi_flags &= ~HQFI_FLAG_BLOCKED;
+    stream->conn_pub->cp_flags |= CP_STREAM_UNBLOCKED;
     LSQ_DEBUG("QPACK decoder unblocked");
 }

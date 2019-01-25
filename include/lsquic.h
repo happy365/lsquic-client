@@ -921,6 +921,10 @@ lsquic_conn_cancel_pending_streams (lsquic_conn_t *, unsigned n);
 /**
  * Mark connection as going away: send GOAWAY frame and do not accept
  * any more incoming streams, nor generate streams of our own.
+ *
+ * Calling this function in for an IETF QUIC connection does not do anything,
+ * as the client MUST NOT send GOAWAY frames.
+ * See [draft-ietf-quic-http-17] Section 4.2.7.
  */
 void
 lsquic_conn_going_away (lsquic_conn_t *);

@@ -25,6 +25,7 @@ struct prog
     struct event                   *prog_timer,
                                    *prog_send,
                                    *prog_usr1;
+    struct event                   *prog_usr2;
     struct sport_head              *prog_sports;
     struct lsquic_engine           *prog_engine;
     const char                     *prog_hostname;

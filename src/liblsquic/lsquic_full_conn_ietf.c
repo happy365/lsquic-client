@@ -94,11 +94,10 @@ enum ifull_conn_flags
     IFC_ACK_QUED_APP  = IFC_ACK_QUED_INIT << PNS_APP,
 #define IFC_ACK_QUEUED (IFC_ACK_QUED_INIT|IFC_ACK_QUED_HSK|IFC_ACK_QUED_APP)
     IFC_HAVE_PEER_SET = 1 << 18,
-    IFC_GOAWAY_SENT   = 1 << 19,
-    IFC_GOT_PRST      = 1 << 20,
-    IFC_IGNORE_INIT   = 1 << 21,
-    IFC_RETRIED       = 1 << 22,
-    IFC_SWITCH_DCID   = 1 << 23, /* Perform DCID switch when a new CID becomes available */
+    IFC_GOT_PRST      = 1 << 19,
+    IFC_IGNORE_INIT   = 1 << 20,
+    IFC_RETRIED       = 1 << 21,
+    IFC_SWITCH_DCID   = 1 << 22, /* Perform DCID switch when a new CID becomes available */
 };
 
 enum send_flags
@@ -106,9 +105,9 @@ enum send_flags
     SF_SEND_MAX_DATA    =  1 << 0,
     SF_SEND_PING        =  1 << 1,
     SF_SEND_PATH_RESP   =  1 << 2,
-    SF_SEND_GOAWAY      =  1 << 3,
-    SF_SEND_NEW_CID     =  1 << 4,
-    SF_SEND_RETIRE_CID  =  1 << 5,
+    SF_SEND_NEW_CID     =  1 << 3,
+    SF_SEND_RETIRE_CID  =  1 << 4,
+    SF_SEND_CONN_CLOSE  =  1 << 5,
 };
 
 #define IFC_IMMEDIATE_CLOSE_FLAGS \
@@ -1266,8 +1265,7 @@ ietf_full_conn_ci_close (struct lsquic_conn *lconn)
                 lsquic_stream_shutdown_internal(stream);
         }
         conn->ifc_flags |= IFC_CLOSING;
-        if (!(conn->ifc_flags & IFC_GOAWAY_SENT))
-            conn->ifc_send_flags |= SF_SEND_GOAWAY;
+        conn->ifc_send_flags |= SF_SEND_CONN_CLOSE;
     }
 }
 
@@ -1295,8 +1293,19 @@ ietf_full_conn_ci_destroy (struct lsquic_conn *lconn)
         conn->ifc_stream_if->on_conn_closed(&conn->ifc_conn);
     if (conn->ifc_pub.u.ietf.prio_tree)
         lsquic_prio_tree_destroy(conn->ifc_pub.u.ietf.prio_tree);
+    if (conn->ifc_conn.cn_enc_session)
+        conn->ifc_conn.cn_esf.i->esfi_destroy(conn->ifc_conn.cn_enc_session);
     free(conn->ifc_errmsg);
     free(conn);
+}
+
+
+static void
+ietf_full_conn_ci_going_away (struct lsquic_conn *lconn)
+{
+    struct ietf_full_conn *conn = (struct ietf_full_conn *) lconn;
+
+        LSQ_NOTICE("going away has no effect in IETF QUIC");
 }
 
 
@@ -1608,25 +1617,43 @@ static void
 process_streams_read_events (struct ietf_full_conn *conn)
 {
     struct lsquic_stream *stream;
-    int have_streams;
+    int have_streams, iters;
+    enum stream_q_flags q_flags, needs_service;
+    static const char *const labels[2] = { "read-0", "read-1", };
 
-    have_streams = 0;
-    TAILQ_FOREACH(stream, &conn->ifc_pub.read_streams, next_read_stream)
-        if (lsquic_stream_readable(stream))
-        {
-            if (!have_streams)
+    conn->ifc_pub.cp_flags &= ~CP_STREAM_UNBLOCKED;
+    iters = 0;
+    do
+    {
+        have_streams = 0;
+        TAILQ_FOREACH(stream, &conn->ifc_pub.read_streams, next_read_stream)
+            if (lsquic_stream_readable(stream))
             {
-                ++have_streams;
-                lsquic_prio_tree_iter_reset(conn->ifc_pub.u.ietf.prio_tree,
-                                                                        "read");
+                if (!have_streams)
+                {
+                    ++have_streams;
+                    lsquic_prio_tree_iter_reset(conn->ifc_pub.u.ietf.prio_tree,
+                                                                labels[iters]);
+                }
+                lsquic_prio_tree_iter_add(conn->ifc_pub.u.ietf.prio_tree,
+                                                                    stream);
             }
-            lsquic_prio_tree_iter_add(conn->ifc_pub.u.ietf.prio_tree, stream);
-        }
 
-    if (have_streams)
+        if (!have_streams)
+            break;
+
+        needs_service = 0;
         while ((stream = lsquic_prio_tree_iter_next(
                                         conn->ifc_pub.u.ietf.prio_tree)))
+        {
+            q_flags = stream->sm_qflags & SMQF_SERVICE_FLAGS;
             lsquic_stream_dispatch_read_events(stream);
+            needs_service |= q_flags ^ (stream->sm_qflags & SMQF_SERVICE_FLAGS);
+        }
+        if (needs_service)
+            service_streams(conn);
+    }
+    while (iters++ == 0 && (conn->ifc_pub.cp_flags & CP_STREAM_UNBLOCKED));
 }
 
 
@@ -1750,6 +1777,7 @@ generate_connection_close_packet (struct ietf_full_conn *conn)
     lsquic_send_ctl_incr_pack_sz(&conn->ifc_send_ctl, packet_out, sz);
     packet_out->po_frame_types |= 1 << QUIC_FRAME_CONNECTION_CLOSE;
     LSQ_DEBUG("generated CONNECTION_CLOSE frame in its own packet");
+    conn->ifc_send_flags &= ~SF_SEND_CONN_CLOSE;
 }
 
 
@@ -2094,6 +2122,7 @@ process_rst_stream_frame (struct ietf_full_conn *conn,
     uint32_t error_code;
     uint64_t offset;
     lsquic_stream_t *stream;
+    int call_on_new;
     const int parsed_len = conn->ifc_conn.cn_pf->pf_parse_rst_frame(p, len,
                                             &stream_id, &offset, &error_code);
     if (parsed_len < 0)
@@ -2104,6 +2133,7 @@ process_rst_stream_frame (struct ietf_full_conn *conn,
     LSQ_DEBUG("Got RST_STREAM; stream: %"PRIu64"; offset: 0x%"PRIX64, stream_id,
                                                                     offset);
 
+    call_on_new = 0;
     stream = find_stream_by_id(conn, stream_id);
     if (!stream)
     {
@@ -2119,16 +2149,15 @@ process_rst_stream_frame (struct ietf_full_conn *conn,
             return 0;
         }
 
-        /* TODO new stream creation
-        stream = new_stream(conn, stream_id, SCF_CALL_ON_NEW);
+        stream = new_stream(conn, stream_id, 0);
         if (!stream)
         {
             ABORT_ERROR("cannot create new stream: %s", strerror(errno));
             return 0;
         }
-        if (stream_id > conn->fc_max_peer_stream_id)
-            conn->fc_max_peer_stream_id = stream_id;
-            */
+        ++call_on_new;
+        if (stream_id > conn->ifc_max_peer_stream_id)
+            conn->ifc_max_peer_stream_id = stream_id;
     }
 
     if (0 != lsquic_stream_rst_in(stream, offset, error_code))
@@ -2136,6 +2165,8 @@ process_rst_stream_frame (struct ietf_full_conn *conn,
         ABORT_ERROR("received invalid RST_STREAM");
         return 0;
     }
+    if (call_on_new)
+        lsquic_stream_call_on_new(stream);
     return parsed_len;
 }
 
@@ -3598,7 +3629,8 @@ ietf_full_conn_ci_tick (struct lsquic_conn *lconn, lsquic_time_t now)
                 0 != lsquic_send_ctl_n_scheduled(&conn->ifc_send_ctl) ||
                                         !conn->ifc_settings->es_silent_close)
         {
-            generate_connection_close_packet(conn);
+            if (conn->ifc_send_flags & SF_SEND_CONN_CLOSE)
+                generate_connection_close_packet(conn);
             tick |= TICK_SEND|TICK_CLOSE;
         }
         else
@@ -3797,6 +3829,7 @@ static const struct conn_iface ietf_full_conn_iface = {
     .ci_get_ctx              =  ietf_full_conn_ci_get_ctx,
     .ci_get_engine           =  NULL,   /* TODO */
     .ci_get_stream_by_id     =  NULL,   /* TODO */
+    .ci_going_away           =  ietf_full_conn_ci_going_away,
     .ci_handshake_failed     =  ietf_full_conn_ci_handshake_failed,
     .ci_handshake_ok         =  ietf_full_conn_ci_handshake_ok,
     .ci_internal_error       =  ietf_full_conn_ci_internal_error,

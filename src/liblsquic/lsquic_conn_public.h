@@ -46,6 +46,9 @@ struct lsquic_conn_public {
             struct h3_prio_tree  *prio_tree;
         }                       ietf;
     }                               u;
+    enum {
+        CP_STREAM_UNBLOCKED     = 1 << 0,   /* Set when a stream becomes unblocked */
+    }                               cp_flags;
     struct lsquic_send_ctl         *send_ctl;
 #if LSQUIC_CONN_STATS
     struct conn_stats              *conn_stats;

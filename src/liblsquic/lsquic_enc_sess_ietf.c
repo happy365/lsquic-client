@@ -809,7 +809,7 @@ static void
 iquic_esfi_destroy (enc_session_t *enc_session_p)
 {
     struct enc_sess_iquic *const enc_sess = enc_session_p;
-    LSQ_DEBUG("destroy client handshake object");
+    LSQ_DEBUG("destroy");
     if (enc_sess->esi_keylog_handle)
         enc_sess->esi_enpub->enp_kli->kli_close(enc_sess->esi_keylog_handle);
     if (enc_sess->esi_ssl)
