@@ -89,6 +89,7 @@ enum ifull_conn_flags
     IFC_ABORT_COMPLAINED
                       = 1 << 13,
     IFC_DCID_SET      = 1 << 14,
+#define IFCBIT_ACK_QUED_SHIFT 15
     IFC_ACK_QUED_INIT = 1 << 15,
     IFC_ACK_QUED_HSK  = IFC_ACK_QUED_INIT << PNS_HSK,
     IFC_ACK_QUED_APP  = IFC_ACK_QUED_INIT << PNS_APP,
@@ -674,10 +675,18 @@ lsquic_ietf_full_conn_client_new (struct lsquic_engine_public *enpub,
 
 
 static int
-should_generate_ack (const struct ietf_full_conn *conn)
+should_generate_ack (struct ietf_full_conn *conn)
 {
-    return (conn->ifc_flags & IFC_ACK_QUEUED)
-        || lsquic_send_ctl_lost_ack(&conn->ifc_send_ctl);
+    unsigned lost_acks;
+
+    /* Need to set which ACKs are queued because generate_ack_frame() does not
+     * generate ACKs unconditionally.
+     */
+    lost_acks = lsquic_send_ctl_lost_ack(&conn->ifc_send_ctl);
+    if (lost_acks)
+        conn->ifc_flags |= lost_acks << IFCBIT_ACK_QUED_SHIFT;
+
+    return (conn->ifc_flags & IFC_ACK_QUEUED) != 0;
 }
 
 
@@ -1496,6 +1505,7 @@ ietf_full_conn_ci_is_tickable (struct lsquic_conn *lconn)
         && (should_generate_ack(conn) ||
             !lsquic_send_ctl_sched_is_blocked(&conn->ifc_send_ctl)))
     {
+        /* XXX What about queued ACKs: why check but not make tickable? */
         if (conn->ifc_send_flags)
         {
             LSQ_DEBUG("tickable: send flags: 0x%X", conn->ifc_send_flags);
@@ -3587,7 +3597,11 @@ ietf_full_conn_ci_tick (struct lsquic_conn *lconn, lsquic_time_t now)
     lsquic_send_ctl_set_buffer_stream_packets(&conn->ifc_send_ctl, 0);
     if (!(conn->ifc_conn.cn_flags & LSCONN_HANDSHAKE_DONE))
     {
-        process_crypto_stream_write_events(conn);
+        s = lsquic_send_ctl_schedule_buffered(&conn->ifc_send_ctl,
+                                                            BPT_HIGHEST_PRIO);
+        conn->ifc_flags |= (s < 0) << IFC_BIT_ERROR;
+        if (0 == s)
+            process_crypto_stream_write_events(conn);
         goto end_write;
     }
 

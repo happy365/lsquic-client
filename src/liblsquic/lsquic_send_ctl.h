@@ -36,6 +36,7 @@ enum send_ctl_flags {
     SC_BUFFER_STREAM= (1 << 5),
     SC_WAS_QUIET    = (1 << 6),
     SC_IETF         = (1 << 7),
+#define SCBIT_LOST_ACK_SHIFT 8
     SC_LOST_ACK_INIT=  1 << 8,
     SC_LOST_ACK_HSK = SC_LOST_ACK_INIT << PNS_HSK,
     SC_LOST_ACK_APP = SC_LOST_ACK_INIT << PNS_APP,
@@ -188,7 +189,8 @@ unsigned
 lsquic_send_ctl_reschedule_packets (lsquic_send_ctl_t *);
 
 #define lsquic_send_ctl_lost_ack(ctl) \
-        ((ctl)->sc_flags & (SC_LOST_ACK_INIT|SC_LOST_ACK_HSK|SC_LOST_ACK_APP))
+    (((ctl)->sc_flags & (SC_LOST_ACK_INIT|SC_LOST_ACK_HSK|SC_LOST_ACK_APP)) \
+                                                        >> SCBIT_LOST_ACK_SHIFT)
 
 #define lsquic_send_ctl_scheduled_ack(ctl, pns) do {                \
     (ctl)->sc_flags &= ~(SC_LOST_ACK_INIT << pns);                  \
