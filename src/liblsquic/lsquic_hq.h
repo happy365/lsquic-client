@@ -35,7 +35,7 @@ enum hq_el_type
 enum hq_setting_id
 {
     HQSID_HEADER_TABLE_SIZE     = 1,
-    HQSID_NUM_PLACEHOLDERS      = 3,
+    HQSID_NUM_PLACEHOLDERS      = 8,
     HQSID_MAX_HEADER_LIST_SIZE  = 6,
     HQSID_QPACK_BLOCKED_STREAMS = 7,
 };
