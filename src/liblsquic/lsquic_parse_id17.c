@@ -561,6 +561,10 @@ id17_parse_crypto_frame (const unsigned char *buf, size_t rem_packet_sz,
 #endif
 
 
+/* Bits 10 (2) is ECT(0); * bits 01 (1) is ECT(1). */
+static const int ecnmap[4] = { 0, 2, 1, 3, };
+
+
 static int
 id17_parse_ack_frame (const unsigned char *const buf, size_t buf_len,
                                             struct ack_info *ack, uint8_t exp)
@@ -630,7 +634,7 @@ id17_parse_ack_frame (const unsigned char *const buf, size_t buf_len,
     {
         for (ecn = 1; ecn <= 3; ++ecn)
         {
-            r = vint_read(p, end, &ack->ecn_counts[ecn]);
+            r = vint_read(p, end, &ack->ecn_counts[ecnmap[ecn]]);
             if (UNLIKELY(r < 0))
                 return -1;
             p += r;
@@ -975,8 +979,8 @@ id17_gen_ack_frame (unsigned char *outbuf, size_t outbuf_sz,
         CHECKOUT((1 << bits[1]) + (1 << bits[2]) + (1 << bits[3]));
         for (ecn = 1; ecn <= 3; ++ecn)
         {
-            vint_write(p, ecn_counts[ecn], bits[ecn], 1 << bits[ecn]);
-            p += 1 << bits[ecn];
+            vint_write(p, ecn_counts[ecnmap[ecn]], bits[ecnmap[ecn]], 1 << bits[ecnmap[ecn]]);
+            p += 1 << bits[ecnmap[ecn]];
         }
     }
 
