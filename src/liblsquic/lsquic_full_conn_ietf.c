@@ -664,6 +664,14 @@ lsquic_ietf_full_conn_client_new (struct lsquic_engine_public *enpub,
         free(conn);
         return NULL;
     }
+    conn->ifc_pub.packet_out_malo =
+                        lsquic_malo_create(sizeof(struct lsquic_packet_out));
+    if (!conn->ifc_pub.packet_out_malo)
+    {
+        free(conn);
+        lsquic_stream_destroy(conn->ifc_crypto_streams[ENC_LEV_CLEAR]);
+        return NULL;
+    }
 
     LSQ_DEBUG("negotiating version %s",
                             lsquic_ver2str[conn->ifc_ver_neg.vn_ver]);
@@ -1356,6 +1364,11 @@ ietf_full_conn_ci_handshake_ok (struct lsquic_conn *lconn)
     uint32_t limit;
     char buf[0x200];
 
+    /* Need to set this flag even we hit an error in the rest of this funciton.
+     * This is because this flag is used to calculate packet out header size
+     */
+    lconn->cn_flags |= LSCONN_HANDSHAKE_DONE;
+
     if (0 != lconn->cn_esf.i->esfi_get_peer_transport_params(
                                             lconn->cn_enc_session, &params))
     {
@@ -1436,7 +1449,6 @@ ietf_full_conn_ci_handshake_ok (struct lsquic_conn *lconn)
     else
         dce->de_flags = 0;
 
-    lconn->cn_flags |= LSCONN_HANDSHAKE_DONE;
     LSQ_INFO("applied peer transport parameters");
 
     if (conn->ifc_flags & IFC_HTTP)
@@ -1482,7 +1494,8 @@ ietf_full_conn_ci_handshake_ok (struct lsquic_conn *lconn)
                 "unidir limits");
     }
 
-    if ((1 << conn->ifc_conn.cn_n_cces) - 1 != conn->ifc_conn.cn_cces_mask)
+    if ((1 << conn->ifc_conn.cn_n_cces) - 1 != conn->ifc_conn.cn_cces_mask
+            && CN_SCID(&conn->ifc_conn)->len != 0)
         conn->ifc_send_flags |= SF_SEND_NEW_CID;
     if ((conn->ifc_flags & (IFC_HTTP|IFC_HAVE_PEER_SET)) != IFC_HTTP)
         maybe_create_delayed_streams(conn);

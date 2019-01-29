@@ -269,6 +269,7 @@ struct conn_stats {
         unsigned long       stream_frames;
         unsigned long       acks;
         unsigned long       packets;            /* Number of sent packets */
+        unsigned long       acked_via_loss;     /* Number of packets acked via loss record */
         unsigned long       retx_packets;       /* Number of retransmitted packets */
         unsigned long       bytes;              /* Overall bytes out */
         unsigned long       headers_uncomp;     /* Sum of uncompressed header bytes */

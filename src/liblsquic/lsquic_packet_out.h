@@ -67,6 +67,8 @@ typedef struct lsquic_packet_out
                                          * largest acked in it.
                                          */
     enum quic_ft_bit   po_frame_types;  /* Bitmask of QUIC_FRAME_* */
+    struct lsquic_packet_out
+                      *po_loss_chain;   /* Circular linked list */
 
     enum packet_out_flags {
         PO_HELLO    = (1 << 1),         /* Packet contains SHLO or CHLO data */
@@ -104,6 +106,13 @@ typedef struct lsquic_packet_out
 #define POECN_SHIFT 25
         PO_ECNBIT_0 = (1 <<25),
         PO_ECNBIT_1 = (1 <<26),
+        PO_LOSS_REC = (1 <<27),         /* This structure is a loss record */
+        /* Only one of PO_SCHED, PO_UNACKED, or PO_LOST can be set.  If pressed
+         * for room in the enum, we can switch to using two bits to represent
+         * this information.
+         */
+        PO_UNACKED  = (1 <<28),         /* On unacked queue */
+        PO_LOST     = (1 <<29),         /* On lost queue */
     }                  po_flags;
     unsigned short     po_data_sz;      /* Number of usable bytes in data */
     unsigned short     po_enc_data_sz;  /* Number of usable bytes in data */

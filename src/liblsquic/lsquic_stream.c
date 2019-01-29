@@ -2385,8 +2385,7 @@ stream_write_to_packet_hsk (struct frame_gen_ctx *fg_ctx, const size_t size)
     struct lsquic_packet_out *packet_out;
     int len;
 
-    packet_out = lsquic_send_ctl_new_packet_out(send_ctl, 0,
-                                                        crypto_level(stream));
+    packet_out = lsquic_send_ctl_new_packet_out(send_ctl, 0, PNS_APP);
     if (!packet_out)
         return SWTP_STOP;
     packet_out->po_header_type = stream->tosend_off == 0

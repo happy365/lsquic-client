@@ -815,6 +815,8 @@ lsquic_engine_destroy (lsquic_engine_t *engine)
         fprintf(engine->stats_fh, "Out:\n");
         fprintf(engine->stats_fh, "    Total bytes: %lu\n", stats->out.bytes);
         fprintf(engine->stats_fh, "    packets: %lu\n", stats->out.packets);
+        fprintf(engine->stats_fh, "    acked via loss record: %lu\n", stats->out.acked_via_loss);
+        fprintf(engine->stats_fh, "    acks: %lu\n", stats->out.acks);
         fprintf(engine->stats_fh, "    retx packets: %lu\n", stats->out.retx_packets);
         fprintf(engine->stats_fh, "    STREAM frame count: %lu\n", stats->out.stream_frames);
         fprintf(engine->stats_fh, "    STREAM payload size: %lu\n", stats->out.stream_data_sz);
@@ -912,8 +914,8 @@ lsquic_engine_connect (lsquic_engine_t *engine, const struct sockaddr *local_sa,
     engine_incref_conn(conn, LSCONN_TICKABLE);
     conn->cn_peer_ctx = peer_ctx;
     lsquic_conn_set_ctx(conn, conn_ctx);
-  end:
     conn->cn_if->ci_client_call_on_new(conn);
+  end:
     ENGINE_OUT(engine);
     return conn;
   err:
