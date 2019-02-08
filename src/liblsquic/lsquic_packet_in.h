@@ -97,9 +97,12 @@ typedef struct lsquic_packet_in
         lsquic_packet_in_public_flags(p) & PACKET_PUBLIC_FLAGS_VERSION : \
         (p)->pi_header_type == HETY_VERNEG)
 
+/* The non-GQUIC branch covers Q044 */
 #define gquic_packet_in_packno_bits(p) \
-    (assert((p)->pi_flags & PI_GQUIC), \
-                    ((lsquic_packet_in_public_flags(p) >> 4) & 3))
+    (((p)->pi_flags & PI_GQUIC) ? \
+                    ((lsquic_packet_in_public_flags(p) >> 4) & 3) : \
+                    ((p)->pi_header_type == HETY_NOT_SET ? \
+                    ((p)->pi_data[0] & 3) : GQUIC_PACKNO_LEN_4))
 
 #define lsquic_packet_in_upref(p) (++(p)->pi_refcnt)
 
