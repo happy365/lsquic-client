@@ -2,27 +2,16 @@
 cmake_minimum_required(VERSION 2.8)
 
 
-project(lsquic)
+PROJECT(lsquic C)
 
-IF (NOT MSVC)
-# We prefer clang
-IF(NOT ("${CMAKE_C_COMPILER}" MATCHES "ccc-analyzer" OR
-        "${CMAKE_C_COMPILER}" MATCHES "gcc"          OR
-        "${CMAKE_C_COMPILER}" MATCHES "afl-gcc"))
-    FIND_PROGRAM(CLANG "clang")
-    IF(CLANG)
-        SET(CMAKE_C_COMPILER "${CLANG}")
+IF (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # If using older glibc, need to link with -lrt.  See clock_getres(2).
+    EXECUTE_PROCESS(
+        COMMAND ${PROJECT_SOURCE_DIR}/print-glibc-version.sh ${CMAKE_C_COMPILER}
+        OUTPUT_VARIABLE GLIBC_VERSION)
+    IF(NOT GLIBC_VERSION EQUAL "" AND GLIBC_VERSION VERSION_LESS 2.17)
+        SET(LIBS ${LIBS} rt)
     ENDIF()
-ENDIF()
-
-ENDIF()
-
-# If using older glibc, need to link with -lrt.  See clock_getres(2).
-EXECUTE_PROCESS(
-    COMMAND ${PROJECT_SOURCE_DIR}/print-glibc-version.sh ${CMAKE_C_COMPILER}
-    OUTPUT_VARIABLE GLIBC_VERSION)
-IF(NOT GLIBC_VERSION EQUAL "" AND GLIBC_VERSION VERSION_LESS 2.17)
-    SET(LIBS ${LIBS} rt)
 ENDIF()
 
 IF("${CMAKE_BUILD_TYPE}" STREQUAL "")
@@ -73,6 +62,7 @@ ENDIF()
 
 #MSVC
 ELSE()
+SET(MY_CMAKE_FLAGS "${MY_CMAKE_FLAGS} /wd4214")	# nonstandard extension used: bit field types other than int
 SET(MY_CMAKE_FLAGS "${MY_CMAKE_FLAGS} -W4 -WX -Zi -DWIN32_LEAN_AND_MEAN -DNOMINMAX -D_CRT_SECURE_NO_WARNINGS -I${CMAKE_CURRENT_SOURCE_DIR}/wincompat")
 IF(CMAKE_BUILD_TYPE STREQUAL "Debug")
     SET(MY_CMAKE_FLAGS "${MY_CMAKE_FLAGS} -Od")
@@ -84,38 +74,123 @@ ELSE()
     #SET(MY_CMAKE_FLAGS "${MY_CMAKE_FLAGS} -DLSQUIC_LOWEST_LOG_LEVEL=LSQ_LOG_INFO")
 ENDIF()
 
-SET (BORINGSSL_INCLUDE ${CMAKE_CURRENT_SOURCE_DIR}/../boringssl/include)
-SET (VCPKG_INCLUDE ${CMAKE_CURRENT_SOURCE_DIR}/../vcpkg/installed/x64-windows-static/include )
-set (BORINGSSL_BASE_LIB_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../boringssl)
-
-SET (VCPKG_BASE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../vcpkg/installed/x64-windows-static)
-
 ENDIF() #MSVC
 
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS}  ${MY_CMAKE_FLAGS} $ENV{EXTRA_CFLAGS}")
 
 MESSAGE(STATUS "Compiler flags: ${CMAKE_C_FLAGS}")
 
-IF(NOT DEFINED BORINGSSL_INCLUDE)
-    SET(BORINGSSL_INCLUDE /usr/local/include)
+IF (NOT DEFINED BORINGSSL_INCLUDE AND DEFINED BORINGSSL_DIR)
+    FIND_PATH(BORINGSSL_INCLUDE NAMES openssl/ssl.h
+                PATHS ${BORINGSSL_DIR}/include
+                NO_DEFAULT_PATH)
 ENDIF()
-IF(NOT DEFINED BORINGSSL_LIB)
-    SET(BORINGSSL_LIB /usr/local/lib)
+# This must be done before adding other include directories to take
+# precedence over header files from other SSL installs.
+
+IF (BORINGSSL_INCLUDE)
+    MESSAGE(STATUS "BoringSSL include directory ${BORINGSSL_INCLUDE}")
+    INCLUDE_DIRECTORIES(${BORINGSSL_INCLUDE})
+ELSE()
+    MESSAGE(FATAL_ERROR "BoringSSL headers not found")
 ENDIF()
 
+IF (NOT DEFINED BORINGSSL_LIB AND DEFINED BORINGSSL_DIR)
+    FOREACH(LIB_NAME ssl crypto decrepit)
+        IF (CMAKE_SYSTEM_NAME STREQUAL Windows)
+            FIND_LIBRARY(BORINGSSL_LIB_${LIB_NAME}
+                NAMES ${LIB_NAME}
+                PATHS ${BORINGSSL_DIR}/${LIB_NAME}
+                PATH_SUFFIXES Debug Release MinSizeRel RelWithDebInfo
+                NO_DEFAULT_PATH)
+        ELSE()
+            FIND_LIBRARY(BORINGSSL_LIB_${LIB_NAME}
+                NAMES lib${LIB_NAME}.a
+                PATHS ${BORINGSSL_DIR}/${LIB_NAME}
+                NO_DEFAULT_PATH)
+        ENDIF()
+        IF(BORINGSSL_LIB_${LIB_NAME})
+            MESSAGE(STATUS "Found ${LIB_NAME} library: ${BORINGSSL_LIB_${LIB_NAME}}")
+        ELSE()
+            MESSAGE(STATUS "${LIB_NAME} library not found")
+        ENDIF()
+    ENDFOREACH()
 
-include_directories(${BORINGSSL_INCLUDE} ${VCPKG_INCLUDE} )
-link_directories( ${BORINGSSL_LIB}  )
+ELSE()
+
+
+    FOREACH(LIB_NAME ssl crypto decrepit)
+        IF (CMAKE_SYSTEM_NAME STREQUAL Windows)
+            FIND_LIBRARY(BORINGSSL_LIB_${LIB_NAME}
+                NAMES ${LIB_NAME}
+                PATHS ${BORINGSSL_LIB}
+                PATH_SUFFIXES Debug Release MinSizeRel RelWithDebInfo
+                NO_DEFAULT_PATH)
+        ELSE()
+            FIND_LIBRARY(BORINGSSL_LIB_${LIB_NAME}
+                NAMES lib${LIB_NAME}.a
+                PATHS ${BORINGSSL_LIB}
+                NO_DEFAULT_PATH)
+        ENDIF()
+        IF(BORINGSSL_LIB_${LIB_NAME})
+            MESSAGE(STATUS "Found ${BORINGSSL_LIB} library: ${BORINGSSL_LIB_${LIB_NAME}}")
+        ELSE()
+            MESSAGE(STATUS "${BORINGSSL_LIB} library not found")
+        ENDIF()
+    ENDFOREACH()
+#endif
+
+ENDIF()
 
 SET(CMAKE_INCLUDE_CURRENT_DIR ON)
-include_directories( include src/lshpack)
-include_directories( include src/lsqpack)
-IF(${CMAKE_SYSTEM_NAME} MATCHES "FreeBSD" OR ${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
+INCLUDE_DIRECTORIES(include src/lshpack)
+INCLUDE_DIRECTORIES(include src/lsqpack)
+IF(CMAKE_SYSTEM_NAME STREQUAL "FreeBSD" OR CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     # Find libevent on FreeBSD:
     include_directories( /usr/local/include )
     link_directories( /usr/local/lib )
 ENDIF()
 
+# Find zlib and libevent header files and library files
+# TODO: libevent is not strictly necessary to build the library.
+FIND_PATH(ZLIB_INCLUDE_DIR NAMES zlib.h)
+IF (ZLIB_INCLUDE_DIR)
+    INCLUDE_DIRECTORIES(${ZLIB_INCLUDE_DIR})
+ELSE()
+    MESSAGE(FATAL_ERROR "zlib.h was not found")
+ENDIF()
+IF (CMAKE_SYSTEM_NAME STREQUAL Windows)
+    FIND_LIBRARY(ZLIB_LIB zlib)
+ELSEIF(CMAKE_SYSTEM_NAME STREQUAL Darwin)
+    # XXX somehow FIND_LIBRARY() does not find zlib on Travis?
+    SET(ZLIB_LIB z)
+ELSE()
+    FIND_LIBRARY(ZLIB_LIB libz.a)
+ENDIF()
+IF(ZLIB_LIB)
+    MESSAGE(STATUS "Found zlib: ${ZLIB_LIB}")
+ELSE()
+    MESSAGE(STATUS "zlib not found")
+ENDIF()
+FIND_PATH(EVENT_INCLUDE_DIR NAMES event2/event.h)
+IF (EVENT_INCLUDE_DIR)
+    INCLUDE_DIRECTORIES(${EVENT_INCLUDE_DIR})
+ELSE()
+    MESSAGE(FATAL_ERROR "event2/event.h was not found")
+ENDIF()
+IF (CMAKE_SYSTEM_NAME STREQUAL Windows)
+    FIND_LIBRARY(EVENT_LIB event)
+ELSE()
+    FIND_LIBRARY(EVENT_LIB libevent.a)
+ENDIF()
+IF(EVENT_LIB)
+    MESSAGE(STATUS "Found event: ${EVENT_LIB}")
+ELSE()
+    MESSAGE(STATUS "libevent not found")
+ENDIF()
+
+
+SET(LIBS lsquic ${EVENT_LIB} ${BORINGSSL_LIB_ssl} ${BORINGSSL_LIB_crypto} ${ZLIB_LIB} ${LIBS})
 
 IF (NOT MSVC)
 
@@ -124,7 +199,7 @@ add_executable(http_client
     test/prog.c
     test/test_common.c
 )
-target_link_libraries(http_client lsquic event pthread libssl.a libcrypto.a ${LIBS} z m)
+LIST(APPEND LIBS pthread m)
 
 #MSVC
 ELSE()
@@ -136,22 +211,11 @@ add_executable(http_client
     wincompat/getopt.c
     wincompat/getopt1.c
 )
-
-target_link_libraries(http_client
-                debug  $(SolutionDir)src/liblsquic/debug/lsquic.lib
-                debug  ${VCPKG_BASE_DIR}/debug/lib/event.lib
-                debug  ${VCPKG_BASE_DIR}/debug/lib/zlibd.lib
-                debug  ${BORINGSSL_BASE_LIB_DIR}/ssl/debug/ssl.lib
-                debug  ${BORINGSSL_BASE_LIB_DIR}/crypto/debug/crypto.lib
-                ws2_32
-                optimized  $(SolutionDir)src/liblsquic/release/lsquic.lib
-                optimized  ${VCPKG_BASE_DIR}/lib/event.lib
-                optimized  ${VCPKG_BASE_DIR}/lib/zlib.lib
-                optimized  ${BORINGSSL_BASE_LIB_DIR}/ssl/release/ssl.lib
-                optimized  ${BORINGSSL_BASE_LIB_DIR}/crypto/release/crypto.lib
-                ${LIBS} )
+LIST(APPEND LIBS ws2_32)
 
 ENDIF()
+
+TARGET_LINK_LIBRARIES(http_client ${LIBS})
 
 
 add_subdirectory(src)

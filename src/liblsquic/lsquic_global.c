@@ -15,12 +15,17 @@ int
 lsquic_global_init (int flags)
 {
     lsquic_init_timers();
-    return lsquic_enc_session_gquic_gquic_1.esf_global_init(flags);
+    if (0 != lsquic_enc_session_common_gquic_1.esf_global_init(flags))
+        return -1;
+    if (0 != lsquic_enc_session_common_id17.esf_global_init(flags))
+        return -1;
+    return 0;
 }
 
 
 void
 lsquic_global_cleanup (void)
 {
-    lsquic_enc_session_gquic_gquic_1.esf_global_cleanup();
+    lsquic_enc_session_common_gquic_1.esf_global_cleanup();
+    lsquic_enc_session_common_id17.esf_global_cleanup();
 }

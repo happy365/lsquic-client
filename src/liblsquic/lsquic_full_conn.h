@@ -11,7 +11,9 @@ lsquic_gquic_full_conn_client_new (struct lsquic_engine_public *,
                const struct lsquic_stream_if *,
                void *stream_if_ctx,
                unsigned flags /* Only FC_SERVER and FC_HTTP */,
-           const char *hostname, unsigned short max_packet_size, int is_ipv4);
+               const char *hostname, unsigned short max_packet_size,
+               int is_ipv4,
+               const unsigned char *zero_rtt, size_t zero_rtt_len);
 
 struct lsquic_conn *
 lsquic_ietf_full_conn_client_new (struct lsquic_engine_public *,
@@ -19,6 +21,7 @@ lsquic_ietf_full_conn_client_new (struct lsquic_engine_public *,
                void *stream_if_ctx,
                unsigned flags /* Only FC_SERVER and FC_HTTP */,
            const char *hostname, unsigned short max_packet_size, int is_ipv4,
+           const unsigned char *zero_rtt, size_t,
            const unsigned char *token, size_t);
 
 struct dcid_elem

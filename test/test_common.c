@@ -71,15 +71,6 @@
 #   define DST_MSG_SZ sizeof(struct sockaddr_in)
 #endif
 
-/* TODO: presumably it's the same on FreeBSD, test it.
- * See https://github.com/quicwg/base-drafts/wiki/ECN-in-QUIC
- */
-#if __linux__
-#define ECN_SUPPORTED 1
-#else
-#define ECN_SUPPORTED 0
-#endif
-
 #if ECN_SUPPORTED
 #define ECN_SZ CMSG_SPACE(sizeof(int))
 #else
@@ -459,11 +450,22 @@ proc_ancillary (
             memcpy(n_dropped, CMSG_DATA(cmsg), sizeof(*n_dropped));
 #endif
 #if ECN_SUPPORTED
-        else if (cmsg->cmsg_level == IPPROTO_IP && cmsg->cmsg_type == IP_TOS)
+        else if ((cmsg->cmsg_level == IPPROTO_IP && cmsg->cmsg_type == IP_TOS)
+                 || (cmsg->cmsg_level == IPPROTO_IPV6
+                                            && cmsg->cmsg_type == IPV6_TCLASS))
         {
             memcpy(ecn, CMSG_DATA(cmsg), sizeof(*ecn));
             *ecn &= IPTOS_ECN_MASK;
         }
+#ifdef __FreeBSD__
+        else if (cmsg->cmsg_level == IPPROTO_IP
+                                            && cmsg->cmsg_type == IP_RECVTOS)
+        {
+            unsigned char tos;
+            memcpy(&tos, CMSG_DATA(cmsg), sizeof(tos));
+            *ecn = tos & IPTOS_ECN_MASK;
+        }
+#endif
 #endif
     }
 }
@@ -595,6 +597,13 @@ read_one_packet (struct read_iter *iter)
 }
 
 
+#if __GNUC__
+#   define UNLIKELY(cond) __builtin_expect(cond, 0)
+#else
+#   define UNLIKELY(cond) cond
+#endif
+
+
 static void
 read_handler (evutil_socket_t fd, short flags, void *ctx)
 {
@@ -610,6 +619,7 @@ read_handler (evutil_socket_t fd, short flags, void *ctx)
     n_batches = 0;
     iter.ri_sport = sport;
 
+    sport->sp_prog->prog_read_count += 1;
     do
     {
         iter.ri_off = 0;
@@ -618,6 +628,14 @@ read_handler (evutil_socket_t fd, short flags, void *ctx)
         do
             rop = read_one_packet(&iter);
         while (ROP_OK == rop);
+
+        if (UNLIKELY(ROP_ERROR == rop && (sport->sp_flags & SPORT_CONNECT)
+                                                    && errno == ECONNREFUSED))
+        {
+            LSQ_ERROR("connection refused: exit program");
+            prog_cleanup(sport->sp_prog);
+            exit(1);
+        }
 
         n_batches += iter.ri_idx > 0;
 
@@ -678,7 +696,7 @@ sport_init_client (struct service_port *sport, struct lsquic_engine *engine,
     int flags;
 #endif
     SOCKET_TYPE sockfd;
-    socklen_t socklen;
+    socklen_t socklen, peer_socklen;
     union {
         struct sockaddr_in  sin;
         struct sockaddr_in6 sin6;
@@ -716,6 +734,19 @@ sport_init_client (struct service_port *sport, struct lsquic_engine *engine,
         CLOSE_SOCKET(sockfd);
         errno = saved_errno;
         return -1;
+    }
+
+    if (sport->sp_flags & SPORT_CONNECT)
+    {
+        peer_socklen = AF_INET == sa_peer->sa_family
+                    ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6);
+        if (0 != connect(sockfd, sa_peer, peer_socklen))
+        {
+            saved_errno = errno;
+            CLOSE_SOCKET(sockfd);
+            errno = saved_errno;
+            return -1;
+        }
     }
 
     /* Make socket non-blocking */
@@ -772,7 +803,11 @@ sport_init_client (struct service_port *sport, struct lsquic_engine *engine,
 #if ECN_SUPPORTED
     {
         int on = 1;
-        s = setsockopt(sockfd, IPPROTO_IP, IP_RECVTOS, &on, sizeof(on));
+        if (AF_INET == sa_local->sa_family)
+            s = setsockopt(sockfd, IPPROTO_IP, IP_RECVTOS, &on, sizeof(on));
+        else
+            s = setsockopt(sockfd, IPPROTO_IPV6, IPV6_RECVTCLASS, &on,
+                                                                sizeof(on));
         if (0 != s)
         {
             saved_errno = errno;
@@ -937,12 +972,30 @@ setup_control_msg (
 #if ECN_SUPPORTED
         else if (cw & CW_ECN)
         {
-            const int tos = spec->ecn;
-            cmsg->cmsg_level = IPPROTO_IP;
-            cmsg->cmsg_type  = IP_TOS;
-            cmsg->cmsg_len   = CMSG_LEN(sizeof(tos));
-            memcpy(CMSG_DATA(cmsg), &tos, sizeof(tos));
-            ctl_len += CMSG_SPACE(sizeof(tos));
+            if (AF_INET == spec->dest_sa->sa_family)
+            {
+                const
+#if defined(__FreeBSD__)
+                      unsigned char
+#else
+                      int
+#endif
+                                    tos = spec->ecn;
+                cmsg->cmsg_level = IPPROTO_IP;
+                cmsg->cmsg_type  = IP_TOS;
+                cmsg->cmsg_len   = CMSG_LEN(sizeof(tos));
+                memcpy(CMSG_DATA(cmsg), &tos, sizeof(tos));
+                ctl_len += CMSG_SPACE(sizeof(tos));
+            }
+            else
+            {
+                const int tos = spec->ecn;
+                cmsg->cmsg_level = IPPROTO_IPV6;
+                cmsg->cmsg_type  = IPV6_TCLASS;
+                cmsg->cmsg_len   = CMSG_LEN(sizeof(tos));
+                memcpy(CMSG_DATA(cmsg), &tos, sizeof(tos));
+                ctl_len += CMSG_SPACE(sizeof(tos));
+            }
             cw &= ~CW_ECN;
         }
 #endif
@@ -1014,7 +1067,8 @@ send_packets_one_by_one (const struct lsquic_out_spec *specs, unsigned count)
     }
 #endif
 
-    for (n = 0; n < count; ++n)
+    n = 0;
+    do
     {
         sport = specs[n].peer_ctx;
 #ifndef WIN32
@@ -1072,7 +1126,9 @@ send_packets_one_by_one (const struct lsquic_out_spec *specs, unsigned count)
 #endif
             break;
         }
+        ++n;
     }
+    while (n < count);
 
     if (n < count)
         prog_sport_cant_send(sport->sp_prog, sport->fd);
@@ -1123,6 +1179,13 @@ set_engine_option (struct lsquic_engine_settings *settings,
         if (0 == strncmp(name, "ecn", 1))
         {
             settings->es_ecn = atoi(val);
+#if !ECN_SUPPORTED
+            if (settings->es_ecn)
+            {
+                LSQ_ERROR("ECN is not supported on this platform");
+                break;
+            }
+#endif
             return 0;
         }
         break;
@@ -1212,6 +1275,11 @@ set_engine_option (struct lsquic_engine_settings *settings,
         if (0 == strncmp(name, "pace_packets", 12))
         {
             settings->es_pace_packets = atoi(val);
+            return 0;
+        }
+        if (0 == strncmp(name, "handshake_to", 12))
+        {
+            settings->es_handshake_to = atoi(val);
             return 0;
         }
         if (0 == strncmp(name, "support_srej", 12))

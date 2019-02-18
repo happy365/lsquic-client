@@ -258,7 +258,7 @@ static void
 ietf_full_conn_ci_packet_in (struct lsquic_conn *, struct lsquic_packet_in *);
 
 static void
-ietf_full_conn_ci_handshake_ok (struct lsquic_conn *);
+handshake_ok (struct lsquic_conn *);
 
 static unsigned
 ietf_full_conn_ci_n_avail_streams (const struct lsquic_conn *);
@@ -582,6 +582,7 @@ lsquic_ietf_full_conn_client_new (struct lsquic_engine_public *enpub,
                void *stream_if_ctx,
                unsigned flags,
            const char *hostname, unsigned short max_packet_size, int is_ipv4,
+           const unsigned char *zero_rtt, size_t zero_rtt_sz,
            const unsigned char *token, size_t token_sz)
 {
     const struct enc_session_funcs_iquic *esfi;
@@ -698,21 +699,33 @@ should_generate_ack (struct ietf_full_conn *conn)
 }
 
 
-static void
-generate_ack_frame_for_pns (struct ietf_full_conn *conn, enum packnum_space pns)
+static int
+ietf_full_conn_ci_can_write_ack (struct lsquic_conn *lconn)
 {
-    struct lsquic_packet_out *packet_out;
+    struct ietf_full_conn *conn = (struct ietf_full_conn *) lconn;
+    return should_generate_ack(conn);
+}
+
+
+static unsigned
+ietf_full_conn_ci_cancel_pending_streams (struct lsquic_conn *lconn, unsigned n)
+{
+    struct ietf_full_conn *conn = (struct ietf_full_conn *) lconn;
+    if (n > conn->ifc_n_delayed_streams)
+        conn->ifc_n_delayed_streams = 0;
+    else
+        conn->ifc_n_delayed_streams -= n;
+    return conn->ifc_n_delayed_streams;
+}
+
+
+static int
+generate_ack_frame_for_pns (struct ietf_full_conn *conn,
+                struct lsquic_packet_out *packet_out, enum packnum_space pns)
+{
     lsquic_time_t now;
     int has_missing, w;
 
-    packet_out = lsquic_send_ctl_new_packet_out(&conn->ifc_send_ctl, 0, pns);
-    if (!packet_out)
-    {
-        ABORT_ERROR("cannot allocate packet: %s", strerror(errno));
-        return;
-    }
-
-    lsquic_send_ctl_scheduled_one(&conn->ifc_send_ctl, packet_out);
     now = lsquic_time_now();
     w = conn->ifc_conn.cn_pf->pf_gen_ack_frame(
             packet_out->po_data + packet_out->po_data_sz,
@@ -724,7 +737,7 @@ generate_ack_frame_for_pns (struct ietf_full_conn *conn, enum packnum_space pns)
             conn->ifc_incoming_ecn ? conn->ifc_ecn_counts_in[pns] : NULL);
     if (w < 0) {
         ABORT_ERROR("generating ACK frame failed: %d", errno);
-        return;
+        return -1;
     }
     char buf[0x100];
     lsquic_hexstr(packet_out->po_data + packet_out->po_data_sz, w, buf, sizeof(buf));
@@ -747,24 +760,39 @@ generate_ack_frame_for_pns (struct ietf_full_conn *conn, enum packnum_space pns)
                                     "packets sent", conn->ifc_n_cons_unretx);
         conn->ifc_send_flags |= SF_SEND_MAX_DATA;
     }
+
+    conn->ifc_n_slack_akbl[pns] = 0;
+    lsquic_send_ctl_n_stop_waiting_reset(&conn->ifc_send_ctl, pns);
+    conn->ifc_flags &= ~(IFC_ACK_QUED_INIT << pns);
+    lsquic_alarmset_unset(&conn->ifc_alset, AL_ACK_INIT + pns);
+    lsquic_send_ctl_sanity_check(&conn->ifc_send_ctl);
+    LSQ_DEBUG("%s ACK state reset", lsquic_pns2str[pns]);
+
+    return 0;
 }
 
 
 static void
 generate_ack_frame (struct ietf_full_conn *conn)
 {
+    struct lsquic_packet_out *packet_out;
     enum packnum_space pns;
+    int s;
 
     for (pns = 0; pns < N_PNS; ++pns)
         if (conn->ifc_flags & (IFC_ACK_QUED_INIT << pns))
         {
-            generate_ack_frame_for_pns(conn, pns);
-            conn->ifc_n_slack_akbl[pns] = 0;
-            lsquic_send_ctl_n_stop_waiting_reset(&conn->ifc_send_ctl, pns);
-            conn->ifc_flags &= ~(IFC_ACK_QUED_INIT << pns);
-            lsquic_alarmset_unset(&conn->ifc_alset, AL_ACK_INIT + pns);
-            lsquic_send_ctl_sanity_check(&conn->ifc_send_ctl);
-            LSQ_DEBUG("%s ACK state reset", lsquic_pns2str[pns]);
+            packet_out = lsquic_send_ctl_new_packet_out(&conn->ifc_send_ctl,
+                                                                        0, pns);
+            if (!packet_out)
+            {
+                ABORT_ERROR("cannot allocate packet: %s", strerror(errno));
+                return;
+            }
+            s = generate_ack_frame_for_pns(conn, packet_out, pns);
+            lsquic_send_ctl_scheduled_one(&conn->ifc_send_ctl, packet_out);
+            if (s != 0)
+                return;
         }
 }
 
@@ -1254,6 +1282,15 @@ process_streams_ready_to_send (struct ietf_full_conn *conn)
 
 
 static void
+ietf_full_conn_ci_write_ack (struct lsquic_conn *lconn,
+                                        struct lsquic_packet_out *packet_out)
+{
+    struct ietf_full_conn *conn = (struct ietf_full_conn *) lconn;
+    (void) generate_ack_frame_for_pns(conn, packet_out, PNS_APP);
+}
+
+
+static void
 ietf_full_conn_ci_client_call_on_new (struct lsquic_conn *lconn)
 {
     struct ietf_full_conn *conn = (struct ietf_full_conn *) lconn;
@@ -1327,7 +1364,7 @@ ietf_full_conn_ci_going_away (struct lsquic_conn *lconn)
 
 
 static void
-ietf_full_conn_ci_handshake_failed (struct lsquic_conn *lconn)
+handshake_failed (struct lsquic_conn *lconn)
 {
     struct ietf_full_conn *conn = (struct ietf_full_conn *) lconn;
     LSQ_DEBUG("handshake failed");
@@ -1353,7 +1390,7 @@ get_new_dce (struct ietf_full_conn *conn)
 
 
 static void
-ietf_full_conn_ci_handshake_ok (struct lsquic_conn *lconn)
+handshake_ok (struct lsquic_conn *lconn)
 {
     struct ietf_full_conn *const conn = (struct ietf_full_conn *) lconn;
     struct lsquic_stream *stream;
@@ -1499,6 +1536,36 @@ ietf_full_conn_ci_handshake_ok (struct lsquic_conn *lconn)
         conn->ifc_send_flags |= SF_SEND_NEW_CID;
     if ((conn->ifc_flags & (IFC_HTTP|IFC_HAVE_PEER_SET)) != IFC_HTTP)
         maybe_create_delayed_streams(conn);
+}
+
+
+static void
+ietf_full_conn_ci_hsk_done (struct lsquic_conn *lconn,
+                                                enum lsquic_hsk_status status)
+{
+    switch (status)
+    {
+    case LSQ_HSK_OK:
+    case LSQ_HSK_0RTT_OK:
+        handshake_ok(lconn);
+        break;
+    default:
+        assert(0);
+        /* fall-through */
+    case LSQ_HSK_FAIL:
+        handshake_failed(lconn);
+        break;
+    }
+}
+
+
+static int
+ietf_full_conn_ci_is_push_enabled (struct lsquic_conn *lconn)
+{
+    struct ietf_full_conn *const conn = (struct ietf_full_conn *) lconn;
+
+    LSQ_DEBUG("%s: not yet (TODO)", __func__);
+    return 0;
 }
 
 
@@ -3850,6 +3917,8 @@ ietf_full_conn_ci_internal_error (struct lsquic_conn *lconn,
 
 
 static const struct conn_iface ietf_full_conn_iface = {
+    .ci_can_write_ack        =  ietf_full_conn_ci_can_write_ack,
+    .ci_cancel_pending_streams =  ietf_full_conn_ci_cancel_pending_streams,
     .ci_client_call_on_new   =  ietf_full_conn_ci_client_call_on_new,
     .ci_close                =  ietf_full_conn_ci_close,
     .ci_destroy              =  ietf_full_conn_ci_destroy,
@@ -3857,9 +3926,9 @@ static const struct conn_iface ietf_full_conn_iface = {
     .ci_get_engine           =  NULL,   /* TODO */
     .ci_get_stream_by_id     =  NULL,   /* TODO */
     .ci_going_away           =  ietf_full_conn_ci_going_away,
-    .ci_handshake_failed     =  ietf_full_conn_ci_handshake_failed,
-    .ci_handshake_ok         =  ietf_full_conn_ci_handshake_ok,
+    .ci_hsk_done             =  ietf_full_conn_ci_hsk_done,
     .ci_internal_error       =  ietf_full_conn_ci_internal_error,
+    .ci_is_push_enabled      =  ietf_full_conn_ci_is_push_enabled,
     .ci_is_tickable          =  ietf_full_conn_ci_is_tickable,
     .ci_make_stream          =  ietf_full_conn_ci_make_stream,
     .ci_n_avail_streams      =  ietf_full_conn_ci_n_avail_streams,
@@ -3873,6 +3942,7 @@ static const struct conn_iface ietf_full_conn_iface = {
     .ci_status               =  ietf_full_conn_ci_status,
     .ci_stateless_reset      =  ietf_full_conn_ci_stateless_reset,
     .ci_tick                 =  ietf_full_conn_ci_tick,
+    .ci_write_ack            =  ietf_full_conn_ci_write_ack,
 };
 
 static const struct conn_iface *ietf_full_conn_iface_ptr =

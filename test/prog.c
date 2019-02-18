@@ -52,6 +52,11 @@ prog_init (struct prog *prog, unsigned flags,
     prog->prog_engine_flags = flags;
     prog->prog_sports       = sports;
     lsquic_engine_init_settings(&prog->prog_settings, flags);
+#if ECN_SUPPORTED
+    prog->prog_settings.es_ecn      = LSQUIC_DF_ECN;
+#else
+    prog->prog_settings.es_ecn      = 0;
+#endif
 
     prog->prog_api.ea_settings      = &prog->prog_settings;
     prog->prog_api.ea_stream_if     = stream_if;
@@ -164,6 +169,12 @@ prog_print_common_options (const struct prog *prog, FILE *out)
 
 
     fprintf(out,
+"   -k          Connect UDP socket.  Only meant to be used with clients\n"
+"                 to pick up ICMP errors.\n"
+"   -i USECS    Clock granularity in microseconds.  Defaults to %u.\n",
+        LSQUIC_DF_CLOCK_GRANULARITY
+    );
+    fprintf(out,
 "   -h          Print this help screen and exit\n"
     );
 }
@@ -208,6 +219,9 @@ prog_set_opt (struct prog *prog, int opt, const char *arg)
     case 'o':
         return set_engine_option(&prog->prog_settings,
                                             &prog->prog_version_cleared, arg);
+    case 'i':
+        prog->prog_settings.es_clock_granularity = atoi(arg);
+        return 0;
     case 's':
         if (0 == (prog->prog_engine_flags & LSENG_SERVER) &&
                                             !TAILQ_EMPTY(prog->prog_sports))
@@ -247,6 +261,14 @@ prog_set_opt (struct prog *prog, int opt, const char *arg)
                 return -1;
             }
         }
+    case 'k':
+        {
+            struct service_port *sport = TAILQ_LAST(prog->prog_sports, sport_head);
+            if (!sport)
+                sport = &prog->prog_dummy_sport;
+            sport->sp_flags |= SPORT_CONNECT;
+        }
+        return 0;
     case 'G':
 #ifndef WIN32
         if (0 == stat(optarg, &st))
@@ -287,7 +309,7 @@ prog_eb (struct prog *prog)
 
 
 int
-prog_connect (struct prog *prog)
+prog_connect (struct prog *prog, unsigned char *zero_rtt, size_t zero_rtt_len)
 {
     struct service_port *sport;
 
@@ -296,8 +318,8 @@ prog_connect (struct prog *prog)
                     (struct sockaddr *) &sport->sp_local_addr,
                     (struct sockaddr *) &sport->sas, sport, NULL,
                     prog->prog_hostname ? prog->prog_hostname : sport->host,
-                    prog->prog_max_packet_size, sport->sp_token_buf,
-                    sport->sp_token_sz))
+                    prog->prog_max_packet_size, zero_rtt, zero_rtt_len,
+                    sport->sp_token_buf, sport->sp_token_sz))
         return -1;
 
     prog_process_conns(prog);
@@ -328,10 +350,11 @@ prog_process_conns (struct prog *prog)
 
     if (lsquic_engine_earliest_adv_tick(prog->prog_engine, &diff))
     {
-        if (diff < 4000)
+        if (diff < 0
+                || (unsigned) diff < prog->prog_settings.es_clock_granularity)
         {
             timeout.tv_sec  = 0;
-            timeout.tv_usec = 4000;
+            timeout.tv_usec = prog->prog_settings.es_clock_granularity;
         }
         else
         {

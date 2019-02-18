@@ -1544,6 +1544,82 @@ lsquic_ID17_parse_packet_in_long_begin (struct lsquic_packet_in *packet_in,
 }
 
 
+/* This is a bare-bones version of lsquic_ID17_parse_packet_in_long_begin().
+ * We take the perspective of the server.
+ */
+int
+lsquic_is_valid_ID17_hs_packet (const unsigned char *buf, size_t length,
+                                                        lsquic_ver_tag_t *tagp)
+{
+    const unsigned char *p = buf;
+    const unsigned char *const end = p + length;
+    lsquic_ver_tag_t tag;
+    enum header_type header_type;
+    unsigned dcil, scil;
+    int verneg, r;
+    unsigned char first_byte;
+    uint64_t payload_len, token_len;
+
+    if (length < 6)
+        return 0;
+    first_byte = *p++;
+
+    memcpy(&tag, p, 4);
+    p += 4;
+    verneg = 0 == tag;
+    if (!verneg)
+        header_type = bits2ht[ (first_byte >> 4) & 3 ];
+    else
+        header_type = HETY_VERNEG;
+
+    dcil = p[0] >> 4;
+    if (dcil)
+        dcil += 3;
+    else
+        return 0;       /* As a server, we expect non-zero DCID */
+    scil = p[0] & 0xF;
+    if (scil)
+        scil += 3;
+    ++p;
+
+    p += dcil;
+    p += scil;
+
+    switch (header_type)
+    {
+    case HETY_INITIAL:
+        r = vint_read(p, end, &token_len);
+        if (r < 0)
+            return 0;
+        p += r;
+        p += token_len;
+        /* fall-through */
+    case HETY_HANDSHAKE:
+    case HETY_0RTT:
+        if (p >= end)
+            return 0;
+        r = vint_read(p, end, &payload_len);
+        if (r < 0)
+            return 0;
+        p += r;
+        if (p - buf + payload_len > length)
+            return 0;
+        if (end - p < 4)
+            return 0;
+        break;
+    case HETY_RETRY:
+        /* Client should not be sending us retry packets */
+        return 0;
+    default:
+        assert(header_type == HETY_VERNEG);
+        return 0;
+    }
+
+    *tagp = tag;
+    return 1;
+}
+
+
 int
 lsquic_ID17_parse_packet_in_short_begin (struct lsquic_packet_in *packet_in,
                 size_t length, int is_server, unsigned cid_len,

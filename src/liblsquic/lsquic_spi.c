@@ -113,7 +113,7 @@ find_and_set_lowest_priority (struct stream_prio_iter *iter)
         if (iter->spi_set[ set ])
             break;
 
-    if (set == 4)
+    if (set >= 4)
     {
         //SPI_DEBUG("%s: cannot find any", __func__);
         return -1;
@@ -135,7 +135,7 @@ find_and_set_lowest_priority (struct stream_prio_iter *iter)
 #endif
 
     SPI_DEBUG("%s: prio %u -> %u", __func__, iter->spi_cur_prio, prio);
-    iter->spi_cur_prio = prio;
+    iter->spi_cur_prio = (unsigned char) prio;
     return 0;
 }
 
@@ -165,7 +165,7 @@ find_and_set_next_priority (struct stream_prio_iter *iter)
         if (iter->spi_set[ set ])
             break;
 
-    if (set == 4)
+    if (set >= 4)
     {
         //SPI_DEBUG("%s: cannot find any", __func__);
         return -1;
@@ -188,7 +188,7 @@ find_and_set_next_priority (struct stream_prio_iter *iter)
 #endif
 
     SPI_DEBUG("%s: prio %u -> %u", __func__, iter->spi_cur_prio, prio);
-    iter->spi_cur_prio = prio;
+    iter->spi_cur_prio = (unsigned char) prio;
     return 0;
 }
 

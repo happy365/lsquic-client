@@ -14,10 +14,34 @@
 #define LSQUIC_LOGGER_MODULE LSQLM_PURGA
 #include "lsquic_logger.h"
 
+/* TODO: use Bloom filter for each page to avoid scans.  Here is how to do it:
+ *
+ * Each page will be split into the page header and the CID array.  The page
+ * header will contain the current accounting information: next page, last,
+ * count, and the newly added Bloom filter bit field.  The page header will
+ * be allocated out of malo to improve locality of reference when search for
+ * missing element is performed.  This way, the CID array won't have to be
+ * pulled into memory cache.  The CID array will only contain struct purga_el
+ * elements and will be 4KB for efficiency.
+ *
+ * The Bloom filter will be constructed using 1024-bit bit field and 6 hash
+ * functions.  This is so that it's convenient to XXH64 a CID and extract
+ * six 10-bit values from it.  With 84 elements per page, this will give us
+ * 0.36% possibility of a false positive.
+ *
+ * Quick calc:
+ *   perl -E '$k=6;$m=1024;$n=int(4096/48);say+(1-exp(1)**-($k*$n/$m))**$k'
+ *
+ * The bitmask is 128 bytes, and so
+ * the malo element will be 256 byte, which will give us 15 page headers
+ * per single malo page.
+ */
+
 struct purga_el
 {
     lsquic_cid_t                puel_cid;
-    enum purga_type             puel_type:8;
+    void                       *puel_peer_ctx;
+    enum purga_type             puel_type;
 };
 
 struct purga_page
@@ -41,12 +65,15 @@ TAILQ_HEAD(purga_pages, purga_page);
 struct lsquic_purga
 {
     lsquic_time_t              pur_min_life;
+    lsquic_cids_update_f       pur_remove_cids;
+    void                      *pur_remove_ctx;
     struct purga_pages         pur_pages;
 };
 
 
 struct lsquic_purga *
-lsquic_purga_new (lsquic_time_t min_life)
+lsquic_purga_new (lsquic_time_t min_life, lsquic_cids_update_f remove_cids,
+                                                                void *remove_ctx)
 {
     struct lsquic_purga *purga;
 
@@ -58,6 +85,8 @@ lsquic_purga_new (lsquic_time_t min_life)
     }
 
     purga->pur_min_life = min_life;
+    purga->pur_remove_cids = remove_cids;
+    purga->pur_remove_ctx = remove_ctx;
     TAILQ_INIT(&purga->pur_pages);
     LSQ_INFO("create purgatory, min life %"PRIu64" usec", min_life);
 
@@ -89,9 +118,27 @@ purga_get_page (struct lsquic_purga *purga)
 }
 
 
+static void
+purga_remove_cids (struct lsquic_purga *purga, struct purga_page *page)
+{
+    unsigned n;
+    lsquic_cid_t cids[ page->pupa_count ];
+    void *peer_ctx[ page->pupa_count ];
+
+    for (n = 0; n < page->pupa_count; ++n)
+    {
+        cids[n]     = page->pupa_els[n].puel_cid;
+        peer_ctx[n] = page->pupa_els[n].puel_peer_ctx;
+    }
+
+    LSQ_DEBUG("calling remove_cids with %u CID%.*s", n, n != 1, "s");
+    purga->pur_remove_cids(purga->pur_remove_ctx, peer_ctx, cids, n);
+}
+
+
 void
 lsquic_purga_add (struct lsquic_purga *purga, const lsquic_cid_t *cid,
-                                    enum purga_type putype, lsquic_time_t now)
+                    void *peer_ctx, enum purga_type putype, lsquic_time_t now)
 {
     struct purga_page *page;
 
@@ -99,7 +146,8 @@ lsquic_purga_add (struct lsquic_purga *purga, const lsquic_cid_t *cid,
     if (!page)
         return;     /* We do best effort, nothing to do if malloc fails */
 
-    page->pupa_els[ page->pupa_count++ ] = (struct purga_el) { *cid, putype, };
+    page->pupa_els[ page->pupa_count++ ]
+                            = (struct purga_el) { *cid, peer_ctx, putype, };
     LSQ_DEBUGC("added %"CID_FMT" to the set", CID_BITS(cid));
     if (PAGE_IS_FULL(page))
     {
@@ -114,6 +162,8 @@ lsquic_purga_add (struct lsquic_purga *purga, const lsquic_cid_t *cid,
         LSQ_DEBUG("page at timestamp %"PRIu64" expired; now is %"PRIu64,
             page->pupa_last, now);
         TAILQ_REMOVE(&purga->pur_pages, page, pupa_next);
+        if (purga->pur_remove_cids && page->pupa_count)
+            purga_remove_cids(purga, page);
         free(page);
     }
 }

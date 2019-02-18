@@ -70,6 +70,8 @@ static char s_str[0x1000];
 
 static const SSL_QUIC_METHOD cry_quic_method;
 
+static int s_idx = -1;
+
 static int
 setup_handshake_keys (struct enc_sess_iquic *, const lsquic_cid_t *);
 
@@ -521,7 +523,7 @@ keylog_callback (const SSL *ssl, const char *line)
 {
     struct enc_sess_iquic *enc_sess;
 
-    enc_sess = SSL_get_app_data(ssl);
+    enc_sess = SSL_get_ex_data(ssl, s_idx);
     if (enc_sess->esi_keylog_handle)
         enc_sess->esi_enpub->enp_kli->kli_log_line(
                                         enc_sess->esi_keylog_handle, line);
@@ -609,7 +611,7 @@ init_client (struct enc_sess_iquic *const enc_sess)
     free(enc_sess->esi_hostname);
     enc_sess->esi_hostname = NULL;
 
-    SSL_set_app_data(enc_sess->esi_ssl, enc_sess);
+    SSL_set_ex_data(enc_sess->esi_ssl, s_idx, enc_sess);
     SSL_set_connect_state(enc_sess->esi_ssl);
 
     LSQ_DEBUG("initialized client enc session");
@@ -743,13 +745,13 @@ iquic_esfi_handshake (enc_session_t *enc_session_p)
 
     enc_sess->esi_header_type = HETY_HANDSHAKE;
     enc_sess->esi_flags |= ESI_HANDSHAKE_OK;
-    enc_sess->esi_conn->cn_if->ci_handshake_ok(enc_sess->esi_conn);
+    enc_sess->esi_conn->cn_if->ci_hsk_done(enc_sess->esi_conn, LSQ_HSK_OK);
 
     return IHS_STOP;    /* XXX: what else can come on the crypto stream? */
 
   err:
     LSQ_DEBUG("handshake failed");
-    enc_sess->esi_conn->cn_if->ci_handshake_failed(enc_sess->esi_conn);
+    enc_sess->esi_conn->cn_if->ci_hsk_done(enc_sess->esi_conn, LSQ_HSK_FAIL);
     return IHS_STOP;
 }
 
@@ -1080,6 +1082,29 @@ iquic_esf_decrypt_packet (enc_session_t *enc_session_p,
 }
 
 
+static int
+iquic_esf_global_init (int flags)
+{
+    s_idx = SSL_get_ex_new_index(0, NULL, NULL, NULL, NULL);
+    if (s_idx >= 0)
+    {
+        LSQ_LOG1(LSQ_LOG_DEBUG, "SSL extra data index: %d", s_idx);
+        return 0;
+    }
+    else
+    {
+        LSQ_LOG1(LSQ_LOG_ERROR, "%s: could not select index", __func__);
+        return -1;
+    }
+}
+
+
+static void
+iquic_esf_global_cleanup (void)
+{
+}
+
+
 static void *
 copy_X509 (void *cert)
 {
@@ -1174,6 +1199,8 @@ const struct enc_session_funcs_common lsquic_enc_session_common_id17 =
 {
     .esf_encrypt_packet  = iquic_esf_encrypt_packet,
     .esf_decrypt_packet  = iquic_esf_decrypt_packet,
+    .esf_global_cleanup  = iquic_esf_global_cleanup,
+    .esf_global_init     = iquic_esf_global_init,
     .esf_tag_len         = IQUIC_TAG_LEN,
     .esf_get_server_cert_chain
                          = iquic_esf_get_server_cert_chain,
@@ -1200,7 +1227,7 @@ cry_sm_set_encryption_secret (SSL *ssl, enum ssl_encryption_level_t level,
     char errbuf[ERR_ERROR_STRING_BUF_LEN];
 #define hexbuf errbuf
 
-    enc_sess = SSL_get_app_data(ssl);
+    enc_sess = SSL_get_ex_data(ssl, s_idx);
     if (!enc_sess)
         return 0;
 
@@ -1256,7 +1283,7 @@ cry_sm_write_message (SSL *ssl, enum ssl_encryption_level_t level,
     void *stream;
     ssize_t nw;
 
-    enc_sess = SSL_get_app_data(ssl);
+    enc_sess = SSL_get_ex_data(ssl, s_idx);
     if (!enc_sess)
         return 0;
 
@@ -1288,7 +1315,7 @@ cry_sm_flush_flight (SSL *ssl)
     unsigned level;
     int s;
 
-    enc_sess = SSL_get_app_data(ssl);
+    enc_sess = SSL_get_ex_data(ssl, s_idx);
     if (!enc_sess)
         return 0;
 

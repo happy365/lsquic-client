@@ -81,6 +81,11 @@ typedef void enc_session_t;
 
 struct enc_session_funcs_common
 {
+    /* Global initialization: call once per implementation */
+    int (*esf_global_init)(int flags);
+
+    /* Global cleanup: call once per implementation */
+    void (*esf_global_cleanup) (void);
 
     enum enc_packout
     (*esf_encrypt_packet) (enc_session_t *, const struct lsquic_engine_public *,
@@ -96,18 +101,22 @@ struct enc_session_funcs_common
     int
     (*esf_verify_reset_token) (enc_session_t *, const unsigned char *, size_t);
 
+    ssize_t
+    (*esf_get_zero_rtt) (enc_session_t *, enum lsquic_version,
+                                                            void *, size_t);
+
+    int
+    (*esf_did_zero_rtt_succeed) (enc_session_t *);
+
+    int
+    (*esf_is_zero_rtt_enabled) (enc_session_t *);
+
     unsigned
     esf_tag_len;
 };
 
 struct enc_session_funcs_gquic
 {
-    /* Global initialization: call once per implementation */
-    int (*esf_global_init)(int flags);
-
-    /* Global cleanup: call once per implementation */
-    void (*esf_global_cleanup) (void);
-
 #if LSQUIC_KEEP_ENC_SESS_HISTORY
     /* Grab encryption session history */
     void (*esf_get_hist) (enc_session_t *,
@@ -131,7 +140,8 @@ struct enc_session_funcs_gquic
     /* Create client session */
     enc_session_t *
     (*esf_create_client) (const char *domain, lsquic_cid_t cid,
-                                    const struct lsquic_engine_public *);
+                                    const struct lsquic_engine_public *,
+                                    const unsigned char *, size_t);
 
     /* Generate connection ID */
     lsquic_cid_t (*esf_generate_cid) (void);

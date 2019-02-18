@@ -143,7 +143,7 @@ void
 lsquic_ev_log_rst_stream_frame_in (const lsquic_cid_t *cid,
         lsquic_stream_id_t stream_id, uint64_t offset, uint32_t error_code)
 {
-    LCID("RST_FRAME frame in: error code %"PRIu32", stream %"PRIu64
+    LCID("RST_STREAM frame in: error code %"PRIu32", stream %"PRIu64
         ", offset: %"PRIu64, error_code, stream_id, offset);
 }
 

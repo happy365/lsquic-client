@@ -30,7 +30,7 @@ main (int argc, char **argv)
     }
 
     per_page = lsquic_purga_cids_per_page();
-    purga = lsquic_purga_new(10);
+    purga = lsquic_purga_new(10, NULL, NULL);
     assert(purga);
 
     cid.len = 2;
@@ -38,7 +38,7 @@ main (int argc, char **argv)
     {
         cid.idbuf[0] = 0;
         cid.idbuf[1] = i;
-        lsquic_purga_add(purga, &cid, PUTY_CONN_DELETED, 20);
+        lsquic_purga_add(purga, &cid, NULL, PUTY_CONN_DELETED, 20);
     }
 
     for (i = 0; i < per_page; ++i)
@@ -49,7 +49,7 @@ main (int argc, char **argv)
     }
 
     ++cid.idbuf[1];
-    lsquic_purga_add(purga, &cid, PUTY_CONN_DELETED, 31);
+    lsquic_purga_add(purga, &cid, NULL, PUTY_CONN_DELETED, 31);
 
     for (i = 0; i < per_page; ++i)
     {

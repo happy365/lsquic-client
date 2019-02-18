@@ -138,6 +138,8 @@ force_close_conn (lsquic_engine_t *engine, lsquic_conn_t *conn);
 
 
 
+
+
 struct lsquic_engine
 {
     struct lsquic_engine_public        pub;
@@ -159,7 +161,6 @@ struct lsquic_engine
     void                              *stream_if_ctx;
     lsquic_packets_out_f               packets_out;
     void                              *packets_out_ctx;
-    void                              *bad_handshake_ctx;
     struct lsquic_hash                *conns_hash;
     struct min_heap                    conns_tickable;
     struct min_heap                    conns_out;
@@ -239,6 +240,7 @@ lsquic_engine_init_settings (struct lsquic_engine_settings *settings,
     settings->es_rw_once         = LSQUIC_DF_RW_ONCE;
     settings->es_proc_time_thresh= LSQUIC_DF_PROC_TIME_THRESH;
     settings->es_pace_packets    = LSQUIC_DF_PACE_PACKETS;
+    settings->es_clock_granularity = LSQUIC_DF_CLOCK_GRANULARITY;
     settings->es_init_max_streams_uni
                                  = LSQUIC_DF_INIT_MAX_STREAMS_UNI;
     settings->es_init_max_streams_bidi
@@ -859,6 +861,7 @@ lsquic_engine_connect (lsquic_engine_t *engine, const struct sockaddr *local_sa,
                        const struct sockaddr *peer_sa,
                        void *peer_ctx, lsquic_conn_ctx_t *conn_ctx, 
                        const char *hostname, unsigned short max_packet_size,
+                       const unsigned char *zero_rtt, size_t zero_rtt_len,
                        const unsigned char *token, size_t token_sz)
 {
     lsquic_conn_t *conn;
@@ -887,11 +890,12 @@ lsquic_engine_connect (lsquic_engine_t *engine, const struct sockaddr *local_sa,
     if (engine->pub.enp_settings.es_versions & LSQUIC_IETF_VERSIONS)
         conn = lsquic_ietf_full_conn_client_new(&engine->pub, engine->stream_if,
                     engine->stream_if_ctx, flags, hostname, max_packet_size,
-                    is_ipv4, token, token_sz);
+                    is_ipv4, zero_rtt, zero_rtt_len, token, token_sz);
     else
         conn = lsquic_gquic_full_conn_client_new(&engine->pub,
                             engine->stream_if, engine->stream_if_ctx, flags,
-                            hostname, max_packet_size, is_ipv4);
+                            hostname, max_packet_size, is_ipv4,
+                            zero_rtt, zero_rtt_len);
     if (!conn)
         goto err;
     ++engine->n_conns;

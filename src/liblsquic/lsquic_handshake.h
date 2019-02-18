@@ -34,4 +34,7 @@ verify_stk(enc_session_t *, const struct sockaddr *ip_addr,
 struct cert_hash_item_st* c_find_certs(const struct lsquic_str *domain);
 #endif
 
+enum lsquic_version
+lsquic_zero_rtt_version (const unsigned char *, size_t);
+
 #endif

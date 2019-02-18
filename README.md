@@ -1,4 +1,6 @@
 [![Build Status](https://travis-ci.org/litespeedtech/lsquic-client.svg?branch=master)](https://travis-ci.org/litespeedtech/lsquic-client)
+[![Build Status](https://api.cirrus-ci.com/github/litespeedtech/lsquic-client.svg)](https://cirrus-ci.com/github/litespeedtech/lsquic-client)
+[![Build status](https://ci.appveyor.com/api/projects/status/kei9649t9leoqicr?svg=true)](https://ci.appveyor.com/project/litespeedtech/lsquic-client)
 
 LiteSpeed QUIC (LSQUIC) Client Library README
 =============================================
@@ -15,8 +17,9 @@ Even better, send us fixes and improvements!
 
 Currently supported QUIC versions are Q035, Q039, Q043, and Q044.  Support
 for newer versions will be added soon after they are released.  The
-version(s) specified by IETF QUIC WG will be added once the IETF version
-of the protocol settles down a little.
+version(s) specified by IETF QUIC WG are being developed on
+[one or more branches](https://github.com/litespeedtech/lsquic-client/branches).
+When deemed stable, the IETF QUIC support will be added to the master branch.
 
 Documentation
 -------------
@@ -52,34 +55,15 @@ cd boringssl
 cmake . &&  make
 ```
 
+Remember where BoringSSL sources are:
+```
+BORINGSSL=$PWD
+```
+
 If you want to turn on optimizations, do
 
 ```
 cmake -DCMAKE_BUILD_TYPE=Release . && make
-```
-
-4. Install the library
-
-This is the manual step.  You will need to copy library files manually.
-LSQUIC client library needs two: `ssl/libssl.a` and `crypto/libcrypto.a`.
-To install these in `/usr/local/lib`, you should do the following:
-
-```
-BORINGSSL_SOURCE=$PWD
-cd /usr/local/lib
-sudo cp $BORINGSSL_SOURCE/ssl/libssl.a .
-sudo cp $BORINGSSL_SOURCE/crypto/libcrypto.a .
-```
-
-If you do not want to install the library (or do not have root), you
-can do this instead:
-
-```
-BORINGSSL_SOURCE=$PWD
-mkdir -p $HOME/tmp/boringssl-libs
-cd $HOME/tmp/boringssl-libs
-ln -s $BORINGSSL_SOURCE/ssl/libssl.a
-ln -s $BORINGSSL_SOURCE/crypto/libcrypto.a
 ```
 
 Building LSQUIC Client Library
@@ -99,8 +83,8 @@ cd lsquic-client
 
 
 ```
-cmake -DBORINGSSL_INCLUDE=$BORINGSSL_SOURCE/include \
-                                -DBORINGSSL_LIB=$HOME/tmp/boringssl-libs .
+# $BORINGSSL is the top-level BoringSSL directory from the previous step
+cmake -DBORINGSSL_DIR=$BORINGSSL .
 make
 ```
 

@@ -24,11 +24,12 @@ enum purga_type
 };
 
 struct lsquic_purga *
-lsquic_purga_new (lsquic_time_t min_life);
+lsquic_purga_new (lsquic_time_t min_life, lsquic_cids_update_f remove_cids,
+                                                            void *remove_ctx);
 
 void
-lsquic_purga_add (struct lsquic_purga *, const lsquic_cid_t *, enum purga_type,
-                                                                lsquic_time_t);
+lsquic_purga_add (struct lsquic_purga *, const lsquic_cid_t *, void *peer_ctx,
+                                                enum purga_type, lsquic_time_t);
 
 enum purga_type
 lsquic_purga_contains (struct lsquic_purga *, const lsquic_cid_t *);
