@@ -54,6 +54,8 @@ struct service_port {
     int                        sp_sndbuf;   /* If SPORT_SET_SNDBUF is set */
     int                        sp_rcvbuf;   /* If SPORT_SET_RCVBUF is set */
     struct prog               *sp_prog;
+    unsigned char             *sp_token_buf;
+    size_t                     sp_token_sz;
 };
 
 TAILQ_HEAD(sport_head, service_port);
@@ -70,6 +72,9 @@ sport_init_client (struct service_port *, struct lsquic_engine *,
 
 int
 sport_packets_out (void *ctx, const struct lsquic_out_spec *, unsigned count);
+
+int
+sport_set_token (struct service_port *, const char *);
 
 int
 set_engine_option (struct lsquic_engine_settings *,

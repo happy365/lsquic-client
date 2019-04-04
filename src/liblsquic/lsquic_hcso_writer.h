@@ -13,6 +13,12 @@ struct hcso_writer
 {
     struct lsquic_stream    *how_stream;
     struct frab_list         how_fral;
+#ifndef NDEBUG
+    enum {
+        HOW_RAND_VARINT = 1 << 0,
+        HOW_CHOP_STREAM = 1 << 1,
+    }                        how_flags;
+#endif
 };
 
 int

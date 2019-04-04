@@ -120,27 +120,42 @@ enum lsquic_version
 #define LSQUIC_EXPERIMENTAL_Q098 0
 #endif
 
+    /**
+     * IETF QUIC Draft-18
+     */
+    LSQVER_ID19,
+
+    /**
+     * Special version to trigger version negotiation.
+     * [draft-ietf-quic-transport-11], Section 3.
+     */
+    LSQVER_VERNEG,
+
     N_LSQVER
 };
 
 /**
- * We currently support versions 35, 39, 43, 44, and 46.
+ * We currently support versions 35, 39, 43, 44, 46, and IETF Draft-18
  * @see lsquic_version
  */
 #define LSQUIC_SUPPORTED_VERSIONS ((1 << N_LSQVER) - 1)
 
-#define LSQUIC_EXPERIMENTAL_VERSIONS (0 \
-                                                | LSQUIC_EXPERIMENTAL_Q098)
+/**
+ * List of versions in which the server never includes CID in short packets.
+ */
+#define LSQUIC_FORCED_TCID0_VERSIONS ((1 << LSQVER_044) | (1 << LSQVER_046))
+
+#define LSQUIC_EXPERIMENTAL_VERSIONS ( \
+                            (1 << LSQVER_VERNEG) | LSQUIC_EXPERIMENTAL_Q098)
 
 #define LSQUIC_DEPRECATED_VERSIONS 0
 
 #define LSQUIC_GQUIC_HEADER_VERSIONS ( \
                 (1 << LSQVER_035) | (1 << LSQVER_039) | (1 << LSQVER_043))
 
-/**
- * List of versions in which the server never includes CID in short packets.
- */
-#define LSQUIC_FORCED_TCID0_VERSIONS ((1 << LSQVER_044) | (1 << LSQVER_046))
+#define LSQUIC_IETF_VERSIONS ((1 << LSQVER_ID19) | (1 << LSQVER_VERNEG))
+
+#define LSQUIC_IETF_DRAFT_VERSIONS ((1 << LSQVER_ID19) | (1 << LSQVER_VERNEG))
 
 enum lsquic_hsk_status
 {
@@ -156,6 +171,11 @@ enum lsquic_hsk_status
      * The handshake succeeded with 0-RTT.
      */
     LSQ_HSK_0RTT_OK,
+    /**
+     * The handshake failed because of 0-RTT (early data rejected).  Retry
+     * the connection without 0-RTT.
+     */
+    LSQ_HSK_0RTT_FAIL,
 };
 
 /**
@@ -200,6 +220,17 @@ struct lsquic_stream_if {
      * This callback is optional.
      */
     void (*on_hsk_done)(lsquic_conn_t *c, enum lsquic_hsk_status s);
+    /**
+     * When server sends a token in NEW_TOKEN frame, this callback is called.
+     * The callback is optional.
+     */
+    void (*on_new_token)(lsquic_conn_t *c, const unsigned char *token,
+                                                        size_t token_size);
+    /**
+     * This optional callback lets client record information needed to
+     * perform a zero-RTT handshake next time around.
+     */
+    void (*on_zero_rtt_info)(lsquic_conn_t *c, const unsigned char *, size_t);
 };
 
 /**
@@ -226,12 +257,30 @@ struct lsquic_stream_if {
 #define LSQUIC_DF_SFCW_CLIENT      (6 * 1024 * 1024)
 #define LSQUIC_DF_MAX_STREAMS_IN   100
 
+/* IQUIC uses different names for these: */
+#define LSQUIC_DF_INIT_MAX_DATA_SERVER LSQUIC_DF_CFCW_SERVER
+#define LSQUIC_DF_INIT_MAX_DATA_CLIENT LSQUIC_DF_CFCW_CLIENT
+#define LSQUIC_DF_INIT_MAX_STREAM_DATA_BIDI_REMOTE_SERVER LSQUIC_DF_SFCW_SERVER
+#define LSQUIC_DF_INIT_MAX_STREAM_DATA_BIDI_LOCAL_SERVER 0
+#define LSQUIC_DF_INIT_MAX_STREAM_DATA_BIDI_REMOTE_CLIENT 0
+#define LSQUIC_DF_INIT_MAX_STREAM_DATA_BIDI_LOCAL_CLIENT LSQUIC_DF_SFCW_CLIENT
+#define LSQUIC_DF_INIT_MAX_STREAMS_BIDI LSQUIC_DF_MAX_STREAMS_IN
+#define LSQUIC_DF_INIT_MAX_STREAMS_UNI 100
+/* XXX What's a good value here? */
+#define LSQUIC_DF_INIT_MAX_STREAM_DATA_UNI_CLIENT   (32 * 1024)
+#define LSQUIC_DF_INIT_MAX_STREAM_DATA_UNI_SERVER   (12 * 1024)
+
+/**
+ * Default idle connection time in seconds.
+ */
+#define LSQUIC_DF_IDLE_TIMEOUT 30
+
 /**
  * Default handshake timeout in microseconds.
  */
 #define LSQUIC_DF_HANDSHAKE_TO     (10 * 1000 * 1000)
 
-#define LSQUIC_DF_IDLE_CONN_TO     (30 * 1000 * 1000)
+#define LSQUIC_DF_IDLE_CONN_TO     (LSQUIC_DF_IDLE_TIMEOUT * 1000 * 1000)
 #define LSQUIC_DF_SILENT_CLOSE     1
 
 /** Default value of maximum header list size.  If set to non-zero value,
@@ -269,12 +318,31 @@ struct lsquic_stream_if {
 /** Default clock granularity is 1000 microseconds */
 #define LSQUIC_DF_CLOCK_GRANULARITY      1000
 
+/** The default value is 8 for simplicity */
+#define LSQUIC_DF_SCID_LEN 8
+
+#define LSQUIC_DF_QPACK_DEC_MAX_BLOCKED 100
+#define LSQUIC_DF_QPACK_DEC_MAX_SIZE 4096
+#define LSQUIC_DF_QPACK_ENC_MAX_BLOCKED 100
+#define LSQUIC_DF_QPACK_ENC_MAX_SIZE 4096
+
+/** ECN is enabled by default */
+#define LSQUIC_DF_ECN 1
+
+/**
+ * The default number of the priority placeholders is higher than the
+ * recommended value of 16 to give the clients even more freedom.
+ */
+#define LSQUIC_DF_H3_PLACEHOLDERS 50
+
 struct lsquic_engine_settings {
     /**
      * This is a bit mask wherein each bit corresponds to a value in
      * enum lsquic_version.  Client starts negotiating with the highest
      * version and goes down.  Server supports either of the versions
      * specified here.
+     *
+     * This setting applies to both Google and IETF QUIC.
      *
      * @see lsquic_version
      */
@@ -328,7 +396,7 @@ struct lsquic_engine_settings {
      */
     unsigned long   es_handshake_to;
 
-    /** ICSL in microseconds */
+    /** ICSL in microseconds; GQUIC only */
     unsigned long   es_idle_conn_to;
 
     /** SCLS (silent close) */
@@ -461,6 +529,134 @@ struct lsquic_engine_settings {
      * is in microseconds; default is @ref LSQUIC_DF_CLOCK_GRANULARITY.
      */
     unsigned        es_clock_granularity;
+
+    /* The following settings are specific to IETF QUIC. */
+    /* vvvvvvvvvvv */
+
+    /**
+     * Initial max data.
+     *
+     * This is a transport parameter.
+     *
+     * Depending on the engine mode, the default value is either
+     * @ref LSQUIC_DF_INIT_MAX_DATA_CLIENT or
+     * @ref LSQUIC_DF_INIT_MAX_DATA_SERVER.
+     */
+    unsigned        es_init_max_data;
+
+    /**
+     * Initial max stream data.
+     *
+     * This is a transport parameter.
+     *
+     * Depending on the engine mode, the default value is either
+     * @ref LSQUIC_DF_INIT_MAX_STREAM_DATA_CLIENT or
+     * @ref LSQUIC_DF_INIT_MAX_STREAM_DATA_BIDI_REMOTE_SERVER.
+     */
+    unsigned        es_init_max_stream_data_bidi_remote;
+    unsigned        es_init_max_stream_data_bidi_local;
+
+    /**
+     * Initial max stream data for unidirectional streams initiated
+     * by remote endpoint.
+     *
+     * This is a transport parameter.
+     *
+     * Depending on the engine mode, the default value is either
+     * @ref LSQUIC_DF_INIT_MAX_STREAM_DATA_UNI_CLIENT or
+     * @ref LSQUIC_DF_INIT_MAX_STREAM_DATA_UNI_SERVER.
+     */
+    unsigned        es_init_max_stream_data_uni;
+
+    /**
+     * Maximum initial number of bidirectional stream.
+     *
+     * This is a transport parameter.
+     *
+     * Default value is @ref LSQUIC_DF_INIT_MAX_STREAMS_BIDI.
+     */
+    unsigned        es_init_max_streams_bidi;
+
+    /**
+     * Maximum initial number of unidirectional stream.
+     *
+     * This is a transport parameter.
+     *
+     * Default value is @ref LSQUIC_DF_INIT_MAX_STREAMS_UNI.
+     */
+    unsigned        es_init_max_streams_uni;
+
+    /**
+     * Idle connection timeout.
+     *
+     * This is a transport parameter.
+     *
+     * (Note: es_idle_conn_to is not reused because it is in microseconds,
+     * which, I now realize, was not a good choice.  Since it will be
+     * obsoleted some time after the switchover to IETF QUIC, we do not
+     * have to keep on using strange units.)
+     *
+     * Default value is @ref LSQUIC_DF_IDLE_TIMEOUT.
+     *
+     * Maximum value is 600 seconds.
+     */
+    unsigned        es_idle_timeout;
+
+    /**
+     * Source Connection ID length.  Only applicable to the IETF QUIC
+     * versions.  Valid values are 4 through 18, inclusive.
+     *
+     * Default value is @ref LSQUIC_DF_SCID_LEN.
+     */
+    unsigned        es_scid_len;
+
+    /**
+     * Maximum size of the QPACK dynamic table that the QPACK decoder will
+     * use.
+     *
+     * The default is @ref LSQUIC_DF_QPACK_DEC_MAX_SIZE.
+     */
+    unsigned        es_qpack_dec_max_size;
+
+    /**
+     * Maximum number of blocked streams that the QPACK decoder is willing
+     * to tolerate.
+     *
+     * The default is @ref LSQUIC_DF_QPACK_DEC_MAX_BLOCKED.
+     */
+    unsigned        es_qpack_dec_max_blocked;
+
+    /**
+     * Maximum size of the dynamic table that the encoder is willing to use.
+     * The actual size of the dynamic table will not exceed the minimum of
+     * this value and the value advertized by peer.
+     *
+     * The default is @ref LSQUIC_DF_QPACK_ENC_MAX_SIZE.
+     */
+    unsigned        es_qpack_enc_max_size;
+
+    /**
+     * Maximum number of blocked streams that the QPACK encoder is willing
+     * to risk.  The actual number of blocked streams will not exceed the
+     * minimum of this value and the value advertized by peer.
+     *
+     * The default is @ref LSQUIC_DF_QPACK_ENC_MAX_BLOCKED.
+     */
+    unsigned        es_qpack_enc_max_blocked;
+
+    /**
+     * Enable ECN support.
+     *
+     * The default is @ref LSQUIC_DF_ECN
+     */
+    int             es_ecn;
+
+    /**
+     * Number of HTTP/3 priorify placeholders.
+     *
+     * The default is @ref LSQUIC_DF_H3_PLACEHOLDERS
+     */
+    unsigned        es_h3_placeholders;
 };
 
 /* Initialize `settings' to default values */
@@ -491,11 +687,12 @@ lsquic_engine_check_settings (const struct lsquic_engine_settings *settings,
 
 struct lsquic_out_spec
 {
-    const unsigned char   *buf;
-    size_t                 sz;
+    struct iovec          *iov;
+    size_t                 iovlen;
     const struct sockaddr *local_sa;
     const struct sockaddr *dest_sa;
     void                  *peer_ctx;
+    int                    ecn; /* Valid values are 0 - 3.  See RFC 3168 */
 };
 
 /**
@@ -590,9 +787,12 @@ struct lsquic_hset_if
      * `hdr_set' is the header set object returned by
      * @ref hsi_create_header_set().
      *
-     * `name_idx' is set to the index in the HPACK static table whose entry's
-     * name element matches `name'.  If there is no such match, `name_idx' is
-     * set to zero.
+     * `name_idx' is set to the index in either the HPACK or QPACK static table
+     * whose entry's name element matches `name'.  The values are as follows:
+     *      - if there is no such match, `name_idx' is set to zero;
+     *      - if HPACK is used, the value is between 1 and 61; and
+     *      - if QPACK is used, the value is 62+ (subtract 62 to get the QPACK
+     *        static table index).
      *
      * If `name' is NULL, this means that no more header are going to be
      * added to the set.
@@ -606,6 +806,26 @@ struct lsquic_hset_if
      * header sets that had an error.
      */
     void                (*hsi_discard_header_set)(void *hdr_set);
+};
+
+/**
+ * SSL keylog interface.
+ */
+struct lsquic_keylog_if
+{
+    /** Return keylog handle or NULL if no key logging is desired */
+    void *    (*kli_open) (void *keylog_ctx, lsquic_conn_t *);
+
+    /**
+     * Log line.  The first argument is the pointer returned by
+     * @ref kli_open.
+     */
+    void      (*kli_log_line) (void *handle, const char *line);
+
+    /**
+     * Close handle.
+     */
+    void      (*kli_close) (void *handle);
 };
 
 /* TODO: describe this important data structure */
@@ -650,6 +870,12 @@ typedef struct lsquic_engine_api
      */
     void /* FILE, really */             *ea_stats_fh;
 #endif
+
+    /**
+     * Optional SSL key logging interface.
+     */
+    const struct lsquic_keylog_if       *ea_keylog_if;
+    void                                *ea_keylog_ctx;
 } lsquic_engine_api_t;
 
 /**
@@ -672,7 +898,9 @@ lsquic_engine_connect (lsquic_engine_t *, const struct sockaddr *local_sa,
                        const struct sockaddr *peer_sa,
                        void *peer_ctx, lsquic_conn_ctx_t *conn_ctx,
                        const char *hostname, unsigned short max_packet_size,
-                       const unsigned char *zero_rtt, size_t zero_rtt_len);
+                       const unsigned char *zero_rtt, size_t zero_rtt_len,
+                       /** Resumption token: optional */
+                       const unsigned char *token, size_t token_sz);
 
 /**
  * Pass incoming packet to the QUIC engine.  This function can be called
@@ -688,7 +916,7 @@ int
 lsquic_engine_packet_in (lsquic_engine_t *,
         const unsigned char *packet_in_data, size_t packet_in_size,
         const struct sockaddr *sa_local, const struct sockaddr *sa_peer,
-        void *peer_ctx);
+        void *peer_ctx, int ecn);
 
 /**
  * Process tickable connections.  This function must be called often enough so
@@ -722,7 +950,8 @@ lsquic_engine_destroy (lsquic_engine_t *);
 unsigned
 lsquic_conn_n_avail_streams (const lsquic_conn_t *);
 
-void lsquic_conn_make_stream(lsquic_conn_t *);
+void
+lsquic_conn_make_stream (lsquic_conn_t *);
 
 /** Return number of delayed streams currently pending */
 unsigned
@@ -735,20 +964,44 @@ lsquic_conn_cancel_pending_streams (lsquic_conn_t *, unsigned n);
 /**
  * Mark connection as going away: send GOAWAY frame and do not accept
  * any more incoming streams, nor generate streams of our own.
+ *
+ * Calling this function in for an IETF QUIC connection does not do anything,
+ * as the client MUST NOT send GOAWAY frames.
+ * See [draft-ietf-quic-http-17] Section 4.2.7.
  */
 void
-lsquic_conn_going_away(lsquic_conn_t *conn);
+lsquic_conn_going_away (lsquic_conn_t *);
 
 /**
  * This forces connection close.  on_conn_closed and on_close callbacks
  * will be called.
  */
-void lsquic_conn_close(lsquic_conn_t *conn);
+void
+lsquic_conn_close (lsquic_conn_t *);
 
 int lsquic_stream_wantread(lsquic_stream_t *s, int is_want);
 ssize_t lsquic_stream_read(lsquic_stream_t *s, void *buf, size_t len);
 ssize_t lsquic_stream_readv(lsquic_stream_t *s, const struct iovec *,
                                                             int iovcnt);
+
+/**
+ * This function allows user-supplied callback to read the stream contents.
+ * It is meant to be used for zero-copy stream processing.
+ */
+ssize_t
+lsquic_stream_readf (lsquic_stream_t *s,
+    /**
+     * The callback takes four parameters:
+     *  - Pointer to user-supplied context;
+     *  - Pointer to the data;
+     *  - Data size (can be zero); and
+     *  - Indicator whether the FIN follows the data.
+     *
+     * The callback returns number of bytes processed.  If this number is zero
+     * or is smaller than `len', reading from stream stops.
+     */
+    size_t (*readf)(void *ctx, const unsigned char *buf, size_t len, int fin),
+    void *ctx);
 
 int lsquic_stream_wantwrite(lsquic_stream_t *s, int is_want);
 
@@ -838,7 +1091,8 @@ int lsquic_stream_send_headers(lsquic_stream_t *s,
 void *
 lsquic_stream_get_hset (lsquic_stream_t *);
 
-int lsquic_conn_is_push_enabled(lsquic_conn_t *c);
+int
+lsquic_conn_is_push_enabled (lsquic_conn_t *);
 
 /** Possible values for how are 0, 1, and 2.  See shutdown(2). */
 int lsquic_stream_shutdown(lsquic_stream_t *s, int how);
@@ -857,16 +1111,8 @@ int lsquic_stream_close(lsquic_stream_t *s);
 struct stack_st_X509 *
 lsquic_conn_get_server_cert_chain (lsquic_conn_t *);
 
-/**
- * Get server config zero_rtt from the encryption session.
- * Returns the number of bytes written to the zero_rtt.
- */
-ssize_t
-lsquic_conn_get_zero_rtt(const lsquic_conn_t *,
-                                    unsigned char *zero_rtt, size_t zero_rtt_len);
-
 /** Returns ID of the stream */
-uint32_t
+lsquic_stream_id_t
 lsquic_stream_id (const lsquic_stream_t *s);
 
 /**
@@ -902,8 +1148,8 @@ lsquic_stream_refuse_push (lsquic_stream_t *s);
  * @retval  -1  This is not a pushed stream.
  */
 int
-lsquic_stream_push_info (const lsquic_stream_t *, uint32_t *ref_stream_id,
-                         void **hdr_set);
+lsquic_stream_push_info (const lsquic_stream_t *,
+                         lsquic_stream_id_t *ref_stream_id, void **hdr_set);
 
 /** Return current priority of the stream */
 unsigned lsquic_stream_priority (const lsquic_stream_t *s);
@@ -923,10 +1169,10 @@ int lsquic_stream_set_priority (lsquic_stream_t *s, unsigned priority);
 lsquic_conn_t * lsquic_stream_conn(const lsquic_stream_t *s);
 
 lsquic_stream_t *
-lsquic_conn_get_stream_by_id (lsquic_conn_t *c, uint32_t stream_id);
+lsquic_conn_get_stream_by_id (lsquic_conn_t *c, lsquic_stream_id_t stream_id);
 
 /** Get connection ID */
-lsquic_cid_t
+const lsquic_cid_t *
 lsquic_conn_id (const lsquic_conn_t *c);
 
 /** Get pointer to the engine */
@@ -1066,23 +1312,25 @@ lsquic_str2ver (const char *str, size_t len);
  * Get user-supplied context associated with the connection.
  */
 lsquic_conn_ctx_t *
-lsquic_conn_get_ctx (const lsquic_conn_t *c);
+lsquic_conn_get_ctx (const lsquic_conn_t *);
 
 /**
  * Set user-supplied context associated with the connection.
  */
-void lsquic_conn_set_ctx (lsquic_conn_t *c, lsquic_conn_ctx_t *h);
+void
+lsquic_conn_set_ctx (lsquic_conn_t *, lsquic_conn_ctx_t *);
 
 /**
  * Get peer context associated with the connection.
  */
-void *lsquic_conn_get_peer_ctx( const lsquic_conn_t *lconn);
+void *
+lsquic_conn_get_peer_ctx (const lsquic_conn_t *);
 
 /**
  * Abort connection.
  */
 void
-lsquic_conn_abort (lsquic_conn_t *c);
+lsquic_conn_abort (lsquic_conn_t *);
 
 /**
  * Returns true if there are connections to be processed, false otherwise.

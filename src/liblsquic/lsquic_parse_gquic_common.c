@@ -16,9 +16,13 @@
 #endif
 
 #include "lsquic_types.h"
+#include "lsquic_int_types.h"
 #include "lsquic_packet_common.h"
 #include "lsquic_packet_out.h"
+#include "lsquic_packet_gquic.h"
 #include "lsquic_packet_in.h"
+#include "lsquic_packet_out.h"
+#include "lsquic_parse_common.h"
 #include "lsquic_parse.h"
 #include "lsquic_parse_common.h"
 #include "lsquic_version.h"
@@ -38,13 +42,21 @@
  * pf_parse_packet_in_finish() routine.
  */
 int
-lsquic_gquic_parse_packet_in_begin (struct lsquic_packet_in *packet_in,
-            size_t length, int is_server, struct packin_parse_state *state)
+lsquic_gquic_parse_packet_in_begin (lsquic_packet_in_t *packet_in,
+                size_t length, int is_server, unsigned cid_len,
+                struct packin_parse_state *state)
 {
     int nbytes;
     enum PACKET_PUBLIC_FLAGS public_flags;
     const unsigned char *p = packet_in->pi_data;
     const unsigned char *const pend = packet_in->pi_data + length;
+
+    if (length > GQUIC_MAX_PACKET_SZ)
+    {
+        LSQ_DEBUG("Cannot handle packet_in_size(%zd) > %d packet incoming "
+            "packet's header", length, GQUIC_MAX_PACKET_SZ);
+        return -1;
+    }
 
     CHECK_SPACE(1, p, pend);
 
@@ -53,7 +65,9 @@ lsquic_gquic_parse_packet_in_begin (struct lsquic_packet_in *packet_in,
     if (public_flags & PACKET_PUBLIC_FLAGS_8BYTE_CONNECTION_ID)
     {
         CHECK_SPACE(8, p, pend);
-        memcpy(&packet_in->pi_conn_id, p, 8);
+        memset(&packet_in->pi_conn_id, 0, sizeof(packet_in->pi_conn_id));
+        packet_in->pi_conn_id.len = 8;
+        memcpy(&packet_in->pi_conn_id.idbuf, p, 8);
         packet_in->pi_flags |= PI_CONN_ID;
         p += 8;
     }
@@ -415,7 +429,8 @@ lsquic_turn_on_fin_Q035_thru_Q039 (unsigned char *stream_header)
 
 
 size_t
-calc_stream_frame_header_sz_gquic (uint32_t stream_id, uint64_t offset)
+calc_stream_frame_header_sz_gquic (lsquic_stream_id_t stream_id,
+                                    uint64_t offset, unsigned data_sz_IGNORED)
 {
     return
         /* Type */
@@ -438,14 +453,31 @@ calc_stream_frame_header_sz_gquic (uint32_t stream_id, uint64_t offset)
 }
 
 
+static const char *const ecn2str[4] =
+{
+    [ECN_NOT_ECT]   = "",
+    [ECN_ECT0]      = "ECT(0)",
+    [ECN_ECT1]      = "ECT(1)",
+    [ECN_CE]        = "CE",
+};
+
+
+#define ECN_COUNTS  " ECT(0): 01234567879012345678790;" \
+                    " ECT(1): 01234567879012345678790;" \
+                    " CE: 01234567879012345678790"
+#define RANGES_TRUNCATED " ranges truncated! "
+
 char *
 acki2str (const struct ack_info *acki, size_t *sz)
 {
     size_t off, bufsz, nw;
+    enum ecn ecn;
     unsigned n;
     char *buf;
 
-    bufsz = acki->n_ranges * (3 /* [-] */ + 20 /* ~0ULL */ * 2);
+    bufsz = acki->n_ranges * (3 /* [-] */ + 20 /* ~0ULL */ * 2)
+        + (acki->flags & AI_ECN ? sizeof(ECN_COUNTS) : 0)
+        + (acki->flags & AI_TRUNCATED ? sizeof(RANGES_TRUNCATED) : 0);
     buf = malloc(bufsz);
     if (!buf)
     {
@@ -464,6 +496,30 @@ acki2str (const struct ack_info *acki, size_t *sz)
         off += nw;
     }
 
+    if (acki->flags & AI_TRUNCATED)
+    {
+        nw = snprintf(buf + off, bufsz - off, RANGES_TRUNCATED);
+        if (nw > bufsz - off)
+        {
+            nw = bufsz - off;
+            goto end;
+        }
+        off += nw;
+    }
+
+    if (acki->flags & AI_ECN)
+    {
+        for (ecn = 1; ecn <= 3; ++ecn)
+        {
+            nw = snprintf(buf + off, bufsz - off, " %s: %"PRIu64"%.*s",
+                        ecn2str[ecn], acki->ecn_counts[ecn], ecn < 3, ";");
+            if (nw > bufsz - off)
+                break;
+            off += nw;
+        }
+    }
+
+  end:
     *sz = off;
     return buf;
 }
@@ -487,7 +543,7 @@ lsquic_gquic_packout_size (const struct lsquic_conn *conn,
 {
     return lsquic_gquic_po_header_sz(packet_out->po_flags)
          + packet_out->po_data_sz
-         + QUIC_PACKET_HASH_SZ
+         + GQUIC_PACKET_HASH_SZ
          ;
 }
 

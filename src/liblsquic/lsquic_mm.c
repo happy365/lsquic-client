@@ -14,15 +14,19 @@
 
 #include "lsquic.h"
 #include "lsquic_int_types.h"
+#include "lsquic_sizes.h"
 #include "lsquic_malo.h"
+#include "lsquic_hash.h"
 #include "lsquic_conn.h"
 #include "lsquic_rtt.h"
 #include "lsquic_packet_common.h"
+#include "lsquic_packet_gquic.h"
 #include "lsquic_packet_in.h"
 #include "lsquic_packet_out.h"
 #include "lsquic_parse.h"
 #include "lsquic_mm.h"
 #include "lsquic_engine_public.h"
+#include "lsquic_full_conn.h"
 
 #define FAIL_NOMEM do { errno = ENOMEM; return NULL; } while (0)
 
@@ -58,6 +62,7 @@ lsquic_mm_init (struct lsquic_mm *mm)
     mm->malo.stream_rec_arr = lsquic_malo_create(sizeof(struct stream_rec_arr));
     mm->malo.packet_in = lsquic_malo_create(sizeof(struct lsquic_packet_in));
     mm->malo.packet_out = lsquic_malo_create(sizeof(struct lsquic_packet_out));
+    mm->malo.dcid_elem = lsquic_malo_create(sizeof(struct dcid_elem));
     TAILQ_INIT(&mm->free_packets_in);
     for (i = 0; i < MM_N_OUT_BUCKETS; ++i)
         SLIST_INIT(&mm->packet_out_bufs[i]);
@@ -84,6 +89,7 @@ lsquic_mm_cleanup (struct lsquic_mm *mm)
     struct sixteen_k_page *skp;
 
     free(mm->acki);
+    lsquic_malo_destroy(mm->malo.dcid_elem);
     lsquic_malo_destroy(mm->malo.packet_in);
     lsquic_malo_destroy(mm->malo.packet_out);
     lsquic_malo_destroy(mm->malo.stream_frame);
@@ -141,9 +147,9 @@ lsquic_mm_get_packet_in (struct lsquic_mm *mm)
 
 /* Based on commonly used MTUs, ordered from small to large: */
 enum {
-    PACKET_OUT_PAYLOAD_0 = 1280                    - QUIC_MIN_PACKET_OVERHEAD,
-    PACKET_OUT_PAYLOAD_1 = QUIC_MAX_IPv6_PACKET_SZ - QUIC_MIN_PACKET_OVERHEAD,
-    PACKET_OUT_PAYLOAD_2 = QUIC_MAX_IPv4_PACKET_SZ - QUIC_MIN_PACKET_OVERHEAD,
+    PACKET_OUT_PAYLOAD_0 = 1280                    - GQUIC_MIN_PACKET_OVERHEAD,
+    PACKET_OUT_PAYLOAD_1 = GQUIC_MAX_IPv6_PACKET_SZ - GQUIC_MIN_PACKET_OVERHEAD,
+    PACKET_OUT_PAYLOAD_2 = GQUIC_MAX_IPv4_PACKET_SZ - GQUIC_MIN_PACKET_OVERHEAD,
 };
 
 
@@ -186,7 +192,7 @@ lsquic_mm_get_packet_out (struct lsquic_mm *mm, struct malo *malo,
     struct packet_out_buf *pob;
     unsigned idx;
 
-    assert(size <= QUIC_MAX_PAYLOAD_SZ);
+    assert(size <= GQUIC_MAX_PAYLOAD_SZ);
 
     fiu_do_on("mm/packet_out", FAIL_NOMEM);
 

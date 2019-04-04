@@ -4616,7 +4616,7 @@ unicla_on_new (void *stream_if_ctx, struct lsquic_stream *stream)
 struct unicla_ctx
 {
     struct varint_read_state               *state;
-    enum { UC_ERROR, UC_MORE, UC_DONE, }    status;
+    enum { UC_MORE, UC_ERROR, UC_DONE, }    status;
 };
 
 
@@ -4632,15 +4632,20 @@ unicla_readf (void *ctx, const unsigned char *begin, size_t sz, int fin)
     const unsigned char *buf = begin;
     int s;
 
-    s = lsquic_varint_read_nb(&buf, begin + sz, unicla_ctx->state);
-    if (s == 0)
-        unicla_ctx->status = UC_DONE;
-    else if (fin)
-        unicla_ctx->status = UC_ERROR;
-    else
-        unicla_ctx->status = UC_MORE;
-
-    return buf - begin;
+    switch (unicla_ctx->status)
+    {
+    case UC_MORE:
+        s = lsquic_varint_read_nb(&buf, begin + sz, unicla_ctx->state);
+        if (s == 0)
+            unicla_ctx->status = UC_DONE;
+        else if (fin)
+            unicla_ctx->status = UC_ERROR;
+        return buf - begin;
+    case UC_DONE:
+        return 0;
+    default:
+        return sz;
+    }
 }
 
 
@@ -4648,7 +4653,8 @@ static void
 unicla_on_read (struct lsquic_stream *stream, lsquic_stream_ctx_t *ctx)
 {
     struct ietf_full_conn *const conn = (void *) ctx;
-    struct unicla_ctx unicla_ctx = { .state = &stream->sm_uni_type_state, };
+    struct unicla_ctx unicla_ctx = { .state = &stream->sm_uni_type_state,
+                                     .status = UC_MORE, };
     ssize_t nr;
 
     nr = lsquic_stream_readf(stream, unicla_readf, &unicla_ctx);

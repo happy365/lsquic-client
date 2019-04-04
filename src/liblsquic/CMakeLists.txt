@@ -3,11 +3,12 @@ SET(lsquic_STAT_SRCS
     lsquic_alarmset.c
     lsquic_conn.c
     lsquic_full_conn.c
+    lsquic_full_conn_ietf.c
     lsquic_chsk_stream.c
     lsquic_engine.c
+    lsquic_parse_common.c
     lsquic_parse_gquic_common.c
     lsquic_parse_iquic_common.c
-    lsquic_parse_common.c
     lsquic_parse_gquic_le.c
     lsquic_parse_gquic_be.c
     lsquic_packet_in.c
@@ -31,7 +32,6 @@ SET(lsquic_STAT_SRCS
     lsquic_frame_reader.c
     lsquic_frame_writer.c
     lsquic_crt_compress.c
-    lsquic_conn_hash.c
     lsquic_eng_hist.c
     lsquic_spi.c
     lsquic_di_nocopy.c
@@ -39,6 +39,7 @@ SET(lsquic_STAT_SRCS
     lsquic_di_error.c
     lsquic_global.c
     lsquic_packet_common.c
+    lsquic_packet_gquic.c
     lsquic_ev_log.c
     lsquic_frame_common.c
     lsquic_packints.c
@@ -55,11 +56,27 @@ SET(lsquic_STAT_SRCS
     lsquic_parse_Q044.c
     lsquic_parse_Q046.c
     lsquic_http1x_if.c
-    )
+    lsquic_trans_params.c
+    lsquic_hkdf.c
+    lsquic_enc_sess_ietf.c
+    lsquic_enc_sess_common.c
+    lsquic_parse_id19.c
+    lsquic_varint.c
+    lsquic_hq.c
+    lsquic_hcsi_reader.c
+    lsquic_hcso_writer.c
+    lsquic_frab_list.c
+    ../lsqpack/lsqpack.c
+    lsquic_qenc_hdl.c
+    lsquic_qdec_hdl.c
+    lsquic_h3_prio.c
+)
 
 
 
 SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DXXH_HEADER_NAME=\\\"lsquic_xxhash.h\\\"")
+SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DLSQPACK_ENC_LOGGER_HEADER=\\\"lsquic_qpack_enc_logger.h\\\"")
+SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DLSQPACK_DEC_LOGGER_HEADER=\\\"lsquic_qpack_dec_logger.h\\\"")
 
 add_library(lsquic STATIC ${lsquic_STAT_SRCS} )
 

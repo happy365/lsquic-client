@@ -30,6 +30,7 @@ SET(MY_CMAKE_FLAGS "${MY_CMAKE_FLAGS} -fno-omit-frame-pointer")
 IF(CMAKE_COMPILER_IS_GNUCC AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 4.9.3)
     SET(MY_CMAKE_FLAGS "${MY_CMAKE_FLAGS} -Wno-missing-field-initializers")
 ENDIF()
+
 IF(CMAKE_BUILD_TYPE STREQUAL "Debug")
     SET(MY_CMAKE_FLAGS "${MY_CMAKE_FLAGS} -O0 -g3")
     IF(CMAKE_C_COMPILER MATCHES "clang" AND
@@ -41,7 +42,6 @@ IF(CMAKE_BUILD_TYPE STREQUAL "Debug")
     #SET(LIBS ${LIBS} fiu)
 ELSE()
     SET(MY_CMAKE_FLAGS "${MY_CMAKE_FLAGS} -O3 -g0")
-    SET(MY_CMAKE_FLAGS "${MY_CMAKE_FLAGS} -DNDEBUG")
     # Comment out the following line to compile out debug messages:
     #SET(MY_CMAKE_FLAGS "${MY_CMAKE_FLAGS} -DLSQUIC_LOWEST_LOG_LEVEL=LSQ_LOG_INFO")
 ENDIF()
@@ -70,7 +70,6 @@ IF(CMAKE_BUILD_TYPE STREQUAL "Debug")
     #SET(LIBS ${LIBS} fiu)
 ELSE()
     SET(MY_CMAKE_FLAGS "${MY_CMAKE_FLAGS} -Ox")
-    SET(MY_CMAKE_FLAGS "${MY_CMAKE_FLAGS} -DNDEBUG")
     # Comment out the following line to compile out debug messages:
     #SET(MY_CMAKE_FLAGS "${MY_CMAKE_FLAGS} -DLSQUIC_LOWEST_LOG_LEVEL=LSQ_LOG_INFO")
 ENDIF()
@@ -145,6 +144,7 @@ ENDIF()
 
 SET(CMAKE_INCLUDE_CURRENT_DIR ON)
 INCLUDE_DIRECTORIES(include src/lshpack)
+INCLUDE_DIRECTORIES(include src/lsqpack)
 IF(CMAKE_SYSTEM_NAME STREQUAL "FreeBSD" OR CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     # Find libevent on FreeBSD:
     include_directories( /usr/local/include )
@@ -193,6 +193,7 @@ ENDIF()
 SET(LIBS lsquic ${EVENT_LIB} ${BORINGSSL_LIB_ssl} ${BORINGSSL_LIB_crypto} ${ZLIB_LIB} ${LIBS})
 
 IF (NOT MSVC)
+
 add_executable(http_client
     test/http_client.c
     test/prog.c
@@ -202,6 +203,7 @@ LIST(APPEND LIBS pthread m)
 
 #MSVC
 ELSE()
+
 add_executable(http_client
     test/http_client.c
     test/prog.c
@@ -220,7 +222,7 @@ add_subdirectory(src)
 
 add_subdirectory(test)
 
-IF(NOT (CMAKE_C_FLAGS MATCHES "-DNDEBUG"))
+IF(CMAKE_BUILD_TYPE STREQUAL "Debug")
     # Our test framework relies on assertions, only compile if assertions are
     # enabled.
     #

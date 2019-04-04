@@ -34,8 +34,7 @@ hcso_write_type (struct hcso_writer *writer)
     int s;
 
 #ifndef NDEBUG
-    const char *env = getenv("LSQUIC_RND_VARINT_LEN");
-    if (env && atoi(env))
+    if (writer->how_flags & HOW_RAND_VARINT)
     {
         s = rand() & 3;
         LSQ_DEBUG("writing %d-byte stream type", 1 << s);
@@ -69,6 +68,19 @@ hcso_on_new (void *stream_if_ctx, struct lsquic_stream *stream)
     struct hcso_writer *writer = stream_if_ctx;
     writer->how_stream = stream;
     lsquic_frab_list_init(&writer->how_fral, 0x100, NULL, NULL, NULL);
+#ifndef NDEBUG
+    const char *env = getenv("LSQUIC_RND_VARINT_LEN");
+    if (env && atoi(env))
+    {
+        writer->how_flags |= HOW_RAND_VARINT;
+        LSQ_INFO("will randomize varints");
+        if (0 == (rand() & 3))
+        {
+            writer->how_flags |= HOW_CHOP_STREAM;
+            LSQ_INFO("will chop beginning of stream into tiny STREAM frames");
+        }
+    }
+#endif
     if (0 != hcso_write_type(writer))
     {
         LSQ_INFO("cannot write to frab list");
@@ -87,9 +99,7 @@ hcso_setting_type2bits (struct hcso_writer *writer, unsigned setting)
 
 #ifndef DEBUG
     unsigned max_bits;
-    const char *str;
-    str = getenv("LSQUIC_RND_VARINT_LEN");
-    if (str && atoi(str))
+    if (writer->how_flags & HOW_RAND_VARINT)
     {
         max_bits = rand() & 3;
         if (max_bits > bits)
@@ -202,6 +212,27 @@ lsquic_hcso_write_settings (struct hcso_writer *writer,
 }
 
 
+#ifndef NDEBUG
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
+static size_t
+one_byte_limit_read (void *ctx, void *buf, size_t bufsz)
+{
+    return lsquic_frab_list_read(ctx, buf, MIN(bufsz, 1));
+}
+
+
+static size_t
+one_byte_limit_size (void *ctx)
+{
+    size_t size;
+
+    size = lsquic_frab_list_size(ctx);
+    return MIN(size, 1);
+}
+
+
+#endif
+
 static void
 hcso_on_write (struct lsquic_stream *stream, lsquic_stream_ctx_t *ctx)
 {
@@ -212,6 +243,14 @@ hcso_on_write (struct lsquic_stream *stream, lsquic_stream_ctx_t *ctx)
         .lsqr_ctx   = &writer->how_fral
     };
     ssize_t nw;
+
+#ifndef NDEBUG
+    if (stream->tosend_off < 8 && (writer->how_flags & HOW_CHOP_STREAM))
+    {
+        reader.lsqr_read = one_byte_limit_read;
+        reader.lsqr_size = one_byte_limit_size;
+    }
+#endif
 
     nw = lsquic_stream_writef(stream, &reader);
     if (nw >= 0)

@@ -7,14 +7,15 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <sys/types.h>
 #if defined(__APPLE__)
 #   define __APPLE_USE_RFC_3542 1
 #endif
 #ifndef WIN32
 #include <netinet/in.h>
+#include <netinet/ip.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
-#include <sys/types.h>
 #include <unistd.h>
 #else
 #include <Windows.h>
@@ -27,7 +28,6 @@
 #include <sys/stat.h>
 #include <sys/queue.h>
 #include <fcntl.h>
-#include <sys/types.h>
 
 #include "test_config.h"
 #if HAVE_REGEX
@@ -71,10 +71,16 @@
 #   define DST_MSG_SZ sizeof(struct sockaddr_in)
 #endif
 
+#if ECN_SUPPORTED
+#define ECN_SZ CMSG_SPACE(sizeof(int))
+#else
+#define ECN_SZ 0
+#endif
+
 #define MAX_PACKET_SZ 1370
 
 #define CTL_SZ (CMSG_SPACE(MAX(DST_MSG_SZ, \
-                                sizeof(struct in6_pktinfo))) + NDROPPED_SZ)
+                        sizeof(struct in6_pktinfo))) + NDROPPED_SZ + ECN_SZ)
 
 /* There are `n_alloc' elements in `vecs', `local_addresses', and
  * `peer_addresses' arrays.  `ctlmsg_data' is n_alloc * CTL_SZ.  Each packets
@@ -91,6 +97,9 @@ struct packets_in
     struct iovec            *vecs;
 #else
     WSABUF                  *vecs;
+#endif
+#if ECN_SUPPORTED
+    int                     *ecn;
 #endif
     struct sockaddr_storage *local_addresses,
                             *peer_addresses;
@@ -176,6 +185,9 @@ allocate_packets_in (SOCKET_TYPE fd)
     packs_in->vecs = malloc(n_alloc * sizeof(packs_in->vecs[0]));
     packs_in->local_addresses = malloc(n_alloc * sizeof(packs_in->local_addresses[0]));
     packs_in->peer_addresses = malloc(n_alloc * sizeof(packs_in->peer_addresses[0]));
+#if ECN_SUPPORTED
+    packs_in->ecn = malloc(n_alloc * sizeof(packs_in->ecn[0]));
+#endif
 
     return packs_in;
 }
@@ -184,6 +196,9 @@ allocate_packets_in (SOCKET_TYPE fd)
 static void
 free_packets_in (struct packets_in *packs_in)
 {
+#if ECN_SUPPORTED
+    free(packs_in->ecn);
+#endif
     free(packs_in->peer_addresses);
     free(packs_in->local_addresses);
     free(packs_in->ctlmsg_data);
@@ -205,6 +220,7 @@ sport_destroy (struct service_port *sport)
         (void) CLOSE_SOCKET(sport->fd);
     if (sport->packs_in)
         free_packets_in(sport->packs_in);
+    free(sport->sp_token_buf);
     free(sport);
 }
 
@@ -212,7 +228,7 @@ sport_destroy (struct service_port *sport)
 struct service_port *
 sport_new (const char *optarg, struct prog *prog)
 {
-    struct service_port *const sport = malloc(sizeof(*sport));
+    struct service_port *const sport = calloc(1, sizeof(*sport));
 #if HAVE_REGEX
     regex_t re;
     regmatch_t matches[5];
@@ -381,6 +397,9 @@ proc_ancillary (
 #if __linux__
                 , uint32_t *n_dropped
 #endif
+#if ECN_SUPPORTED
+                , int *ecn
+#endif
                 )
 {
     const struct in6_pktinfo *in6_pkt;
@@ -429,6 +448,24 @@ proc_ancillary (
         else if (cmsg->cmsg_level == SOL_SOCKET &&
                  cmsg->cmsg_type  == SO_RXQ_OVFL)
             memcpy(n_dropped, CMSG_DATA(cmsg), sizeof(*n_dropped));
+#endif
+#if ECN_SUPPORTED
+        else if ((cmsg->cmsg_level == IPPROTO_IP && cmsg->cmsg_type == IP_TOS)
+                 || (cmsg->cmsg_level == IPPROTO_IPV6
+                                            && cmsg->cmsg_type == IPV6_TCLASS))
+        {
+            memcpy(ecn, CMSG_DATA(cmsg), sizeof(*ecn));
+            *ecn &= IPTOS_ECN_MASK;
+        }
+#ifdef __FreeBSD__
+        else if (cmsg->cmsg_level == IPPROTO_IP
+                                            && cmsg->cmsg_type == IP_RECVTOS)
+        {
+            unsigned char tos;
+            memcpy(&tos, CMSG_DATA(cmsg), sizeof(tos));
+            *ecn = tos & IPTOS_ECN_MASK;
+        }
+#endif
 #endif
     }
 }
@@ -479,6 +516,7 @@ read_one_packet (struct read_iter *iter)
     packs_in->vecs[iter->ri_idx].len = MAX_PACKET_SZ;
 #endif
 
+  top:
     ctl_buf = packs_in->ctlmsg_data + iter->ri_idx * CTL_SZ;
 
 #ifndef WIN32
@@ -495,6 +533,14 @@ read_one_packet (struct read_iter *iter)
         if (!(EAGAIN == errno || EWOULDBLOCK == errno))
             LSQ_ERROR("recvmsg: %s", strerror(errno));
         return ROP_ERROR;
+    }
+    if (msg.msg_flags & (MSG_TRUNC|MSG_CTRUNC))
+    {
+        if (msg.msg_flags & MSG_TRUNC)
+            LSQ_INFO("packet truncated - drop it");
+        if (msg.msg_flags & MSG_CTRUNC)
+            LSQ_WARN("packet's auxilicary data truncated - drop it");
+        goto top;
     }
 #else
     WSAMSG msg = {
@@ -517,9 +563,15 @@ read_one_packet (struct read_iter *iter)
 #if __linux__
     n_dropped = 0;
 #endif
+#if ECN_SUPPORTED
+    packs_in->ecn[iter->ri_idx] = 0;
+#endif
     proc_ancillary(&msg, local_addr
 #if __linux__
         , &n_dropped
+#endif
+#if ECN_SUPPORTED
+        , &packs_in->ecn[iter->ri_idx]
 #endif
     );
 #if __linux__
@@ -598,7 +650,13 @@ read_handler (evutil_socket_t fd, short flags, void *ctx)
 #endif
                         (struct sockaddr *) &packs_in->local_addresses[n],
                         (struct sockaddr *) &packs_in->peer_addresses[n],
-                        sport))
+                        sport,
+#if ECN_SUPPORTED
+                        packs_in->ecn[n]
+#else
+                        0
+#endif
+                        ))
                 break;
 
         if (n > 0)
@@ -742,6 +800,24 @@ sport_init_client (struct service_port *sport, struct lsquic_engine *engine,
     }
 #endif
 
+#if ECN_SUPPORTED
+    {
+        int on = 1;
+        if (AF_INET == sa_local->sa_family)
+            s = setsockopt(sockfd, IPPROTO_IP, IP_RECVTOS, &on, sizeof(on));
+        else
+            s = setsockopt(sockfd, IPPROTO_IPV6, IPV6_RECVTCLASS, &on,
+                                                                sizeof(on));
+        if (0 != s)
+        {
+            saved_errno = errno;
+            close(sockfd);
+            errno = saved_errno;
+            return -1;
+        }
+    }
+#endif
+
     if (sport->sp_flags & SPORT_SET_SNDBUF)
     {
         s = setsockopt(sockfd, SOL_SOCKET, SO_SNDBUF,
@@ -803,6 +879,14 @@ sport_init_client (struct service_port *sport, struct lsquic_engine *engine,
 }
 
 
+enum ctl_what
+{
+    CW_SENDADDR     = 1 << 0,
+#if ECN_SUPPORTED
+    CW_ECN          = 1 << 1,
+#endif
+};
+
 static void
 setup_control_msg (
 #ifndef WIN32
@@ -810,8 +894,8 @@ setup_control_msg (
 #else
                    WSAMSG
 #endif
-                                 *msg, const struct lsquic_out_spec *spec,
-                                            unsigned char *buf, size_t bufsz)
+                                 *msg, enum ctl_what cw,
+        const struct lsquic_out_spec *spec, unsigned char *buf, size_t bufsz)
 {
     struct cmsghdr *cmsg;
     struct sockaddr_in *local_sa;
@@ -820,6 +904,7 @@ setup_control_msg (
     struct in_pktinfo info;
 #endif
     struct in6_pktinfo info6;
+    size_t ctl_len;
 
 #ifndef WIN32
     msg->msg_control    = buf;
@@ -828,52 +913,100 @@ setup_control_msg (
     msg->Control.buf    = (char*)buf;
     msg->Control.len = bufsz;
 #endif
-    cmsg = CMSG_FIRSTHDR(msg);
 
-    if (AF_INET == spec->dest_sa->sa_family)
+    /* Need to zero the buffer due to a bug(?) in CMSG_NXTHDR.  See
+     * https://stackoverflow.com/questions/27601849/cmsg-nxthdr-returns-null-even-though-there-are-more-cmsghdr-objects
+     */
+    memset(buf, 0, bufsz);
+
+    ctl_len = 0;
+    for (cmsg = CMSG_FIRSTHDR(msg); cw && cmsg; cmsg = CMSG_NXTHDR(msg, cmsg))
     {
-        local_sa = (struct sockaddr_in *) spec->local_sa;
+        if (cw & CW_SENDADDR)
+        {
+            if (AF_INET == spec->dest_sa->sa_family)
+            {
+                local_sa = (struct sockaddr_in *) spec->local_sa;
 #if __linux__ || __APPLE__
-        memset(&info, 0, sizeof(info));
-        info.ipi_spec_dst = local_sa->sin_addr;
-        cmsg->cmsg_level    = IPPROTO_IP;
-        cmsg->cmsg_type     = IP_PKTINFO;
-        cmsg->cmsg_len      = CMSG_LEN(sizeof(info));
-        memcpy(CMSG_DATA(cmsg), &info, sizeof(info));
+                memset(&info, 0, sizeof(info));
+                info.ipi_spec_dst = local_sa->sin_addr;
+                cmsg->cmsg_level    = IPPROTO_IP;
+                cmsg->cmsg_type     = IP_PKTINFO;
+                cmsg->cmsg_len      = CMSG_LEN(sizeof(info));
+                ctl_len += CMSG_SPACE(sizeof(info));
+                memcpy(CMSG_DATA(cmsg), &info, sizeof(info));
 #elif WIN32
-        memset(&info, 0, sizeof(info));
-        info.ipi_addr = local_sa->sin_addr;
-        cmsg->cmsg_level    = IPPROTO_IP;
-        cmsg->cmsg_type     = IP_PKTINFO;
-        cmsg->cmsg_len      = CMSG_LEN(sizeof(info));
-        memcpy(WSA_CMSG_DATA(cmsg), &info, sizeof(info));
+                memset(&info, 0, sizeof(info));
+                info.ipi_addr = local_sa->sin_addr;
+                cmsg->cmsg_level    = IPPROTO_IP;
+                cmsg->cmsg_type     = IP_PKTINFO;
+                cmsg->cmsg_len      = CMSG_LEN(sizeof(info));
+                ctl_len += CMSG_SPACE(sizeof(info));
+                memcpy(WSA_CMSG_DATA(cmsg), &info, sizeof(info));
 #else
-        cmsg->cmsg_level    = IPPROTO_IP;
-        cmsg->cmsg_type     = IP_SENDSRCADDR;
-        cmsg->cmsg_len      = CMSG_LEN(sizeof(local_sa->sin_addr));
-        memcpy(CMSG_DATA(cmsg), &local_sa->sin_addr,
-                                            sizeof(local_sa->sin_addr));
+                cmsg->cmsg_level    = IPPROTO_IP;
+                cmsg->cmsg_type     = IP_SENDSRCADDR;
+                cmsg->cmsg_len      = CMSG_LEN(sizeof(local_sa->sin_addr));
+                ctl_len += CMSG_SPACE(sizeof(local_sa->sin_addr));
+                memcpy(CMSG_DATA(cmsg), &local_sa->sin_addr,
+                                                    sizeof(local_sa->sin_addr));
 #endif
-    }
-    else
-    {
-        local_sa6 = (struct sockaddr_in6 *) spec->local_sa;
-        memset(&info6, 0, sizeof(info6));
-        info6.ipi6_addr = local_sa6->sin6_addr;
-        cmsg->cmsg_level    = IPPROTO_IPV6;
-        cmsg->cmsg_type     = IPV6_PKTINFO;
-        cmsg->cmsg_len      = CMSG_LEN(sizeof(info6));
+            }
+            else
+            {
+                local_sa6 = (struct sockaddr_in6 *) spec->local_sa;
+                memset(&info6, 0, sizeof(info6));
+                info6.ipi6_addr = local_sa6->sin6_addr;
+                cmsg->cmsg_level    = IPPROTO_IPV6;
+                cmsg->cmsg_type     = IPV6_PKTINFO;
+                cmsg->cmsg_len      = CMSG_LEN(sizeof(info6));
 #ifndef WIN32
-        memcpy(CMSG_DATA(cmsg), &info6, sizeof(info6));
+                memcpy(CMSG_DATA(cmsg), &info6, sizeof(info6));
 #else
-        memcpy(WSA_CMSG_DATA(cmsg), &info6, sizeof(info6));
+                memcpy(WSA_CMSG_DATA(cmsg), &info6, sizeof(info6));
 #endif
+                ctl_len += CMSG_SPACE(sizeof(info6));
+            }
+            cw &= ~CW_SENDADDR;
+        }
+#if ECN_SUPPORTED
+        else if (cw & CW_ECN)
+        {
+            if (AF_INET == spec->dest_sa->sa_family)
+            {
+                const
+#if defined(__FreeBSD__)
+                      unsigned char
+#else
+                      int
+#endif
+                                    tos = spec->ecn;
+                cmsg->cmsg_level = IPPROTO_IP;
+                cmsg->cmsg_type  = IP_TOS;
+                cmsg->cmsg_len   = CMSG_LEN(sizeof(tos));
+                memcpy(CMSG_DATA(cmsg), &tos, sizeof(tos));
+                ctl_len += CMSG_SPACE(sizeof(tos));
+            }
+            else
+            {
+                const int tos = spec->ecn;
+                cmsg->cmsg_level = IPPROTO_IPV6;
+                cmsg->cmsg_type  = IPV6_TCLASS;
+                cmsg->cmsg_len   = CMSG_LEN(sizeof(tos));
+                memcpy(CMSG_DATA(cmsg), &tos, sizeof(tos));
+                ctl_len += CMSG_SPACE(sizeof(tos));
+            }
+            cw &= ~CW_ECN;
+        }
+#endif
+        else
+            assert(0);
     }
 
 #ifndef WIN32
-    msg->msg_controllen = cmsg->cmsg_len;
+    msg->msg_controllen = ctl_len;
 #else
-    msg->Control.len = cmsg->cmsg_len;
+    msg->Control.len = ctl_len;
 #endif
 }
 
@@ -882,6 +1015,7 @@ static int
 send_packets_one_by_one (const struct lsquic_out_spec *specs, unsigned count)
 {
     const struct service_port *sport;
+    enum ctl_what cw;
     unsigned n;
     int s = 0;
 #ifndef WIN32
@@ -898,14 +1032,13 @@ send_packets_one_by_one (const struct lsquic_out_spec *specs, unsigned count)
 #	define SIZE1 sizeof(struct in_addr)
 #endif
         unsigned char buf[
-            CMSG_SPACE(MAX(SIZE1, sizeof(struct in6_pktinfo)))];
+            CMSG_SPACE(MAX(SIZE1, sizeof(struct in6_pktinfo)))
+#if ECN_SUPPORTED
+            + CMSG_SPACE(sizeof(int))
+#endif
+        ];
         struct cmsghdr cmsg;
     } ancil;
-#ifndef WIN32
-    struct iovec iov;
-#else
-    WSABUF iov;
-#endif
 
     if (0 == count)
         return 0;
@@ -934,28 +1067,32 @@ send_packets_one_by_one (const struct lsquic_out_spec *specs, unsigned count)
     {
         sport = specs[n].peer_ctx;
 #ifndef WIN32
-        iov.iov_base = (void *) specs[n].buf;
-        iov.iov_len = specs[n].sz;
         msg.msg_name       = (void *) specs[n].dest_sa;
         msg.msg_namelen    = (AF_INET == specs[n].dest_sa->sa_family ?
                                             sizeof(struct sockaddr_in) :
                                             sizeof(struct sockaddr_in6)),
-        msg.msg_iov        = &iov;
-        msg.msg_iovlen     = 1;
+        msg.msg_iov        = specs[n].iov;
+        msg.msg_iovlen     = specs[n].iovlen;
         msg.msg_flags      = 0;
 #else
-        iov.buf = (void *) specs[n].buf;
-        iov.len = specs[n].sz;
         msg.name           = (void *) specs[n].dest_sa;
         msg.namelen        = (AF_INET == specs[n].dest_sa->sa_family ?
                                             sizeof(struct sockaddr_in) :
                                             sizeof(struct sockaddr_in6)),
-        msg.lpBuffers      = &iov;
-        msg.dwBufferCount  = 1;
+        msg.lpBuffers      = specs[n].iov;
+        msg.dwBufferCount  = specs[n].iovlen;
         msg.dwFlags        = 0;
 #endif
         if ((sport->sp_flags & SPORT_SERVER) && specs[n].local_sa->sa_family)
-            setup_control_msg(&msg, &specs[n], ancil.buf, sizeof(ancil.buf));
+            cw = CW_SENDADDR;
+        else
+            cw = 0;
+#if ECN_SUPPORTED
+        if (sport->sp_prog->prog_api.ea_settings->es_ecn && specs[n].ecn)
+            cw |= CW_ECN;
+#endif
+        if (cw)
+            setup_control_msg(&msg, cw, &specs[n], ancil.buf, sizeof(ancil.buf));
         else
         {
 #ifndef WIN32
@@ -1029,6 +1166,20 @@ set_engine_option (struct lsquic_engine_settings *settings,
             return 0;
         }
         break;
+    case 3:
+        if (0 == strncmp(name, "ecn", 1))
+        {
+            settings->es_ecn = atoi(val);
+#if !ECN_SUPPORTED
+            if (settings->es_ecn)
+            {
+                LSQ_ERROR("ECN is not supported on this platform");
+                break;
+            }
+#endif
+            return 0;
+        }
+        break;
     case 4:
         if (0 == strncmp(name, "cfcw", 4))
         {
@@ -1078,6 +1229,11 @@ set_engine_option (struct lsquic_engine_settings *settings,
             settings->es_max_sfcw = atoi(val);
             return 0;
         }
+        if (0 == strncmp(name, "scid_len", 8))
+        {
+            settings->es_scid_len = atoi(val);
+            return 0;
+        }
         break;
     case 10:
         if (0 == strncmp(name, "honor_prst", 10))
@@ -1097,6 +1253,11 @@ set_engine_option (struct lsquic_engine_settings *settings,
             settings->es_silent_close = atoi(val);
             return 0;
         }
+        if (0 == strncmp(name, "support_push", 12))
+        {
+            settings->es_support_push = atoi(val);
+            return 0;
+        }
         if (0 == strncmp(name, "support_nstp", 12))
         {
             settings->es_support_nstp = atoi(val);
@@ -1112,11 +1273,21 @@ set_engine_option (struct lsquic_engine_settings *settings,
             settings->es_handshake_to = atoi(val);
             return 0;
         }
+        if (0 == strncmp(name, "support_srej", 12))
+        {
+            settings->es_support_srej = atoi(val);
+            return 0;
+        }
         break;
     case 13:
         if (0 == strncmp(name, "support_tcid0", 13))
         {
             settings->es_support_tcid0 = atoi(val);
+            return 0;
+        }
+        if (0 == strncmp(name, "init_max_data", 13))
+        {
+            settings->es_init_max_data = atoi(val);
             return 0;
         }
         break;
@@ -1132,6 +1303,13 @@ set_engine_option (struct lsquic_engine_settings *settings,
             return 0;
         }
         break;
+    case 15:
+        if (0 == strncmp(name, "h3_placeholders", 15))
+        {
+            settings->es_h3_placeholders = atoi(val);
+            return 0;
+        }
+        break;
     case 16:
         if (0 == strncmp(name, "proc_time_thresh", 16))
         {
@@ -1139,10 +1317,59 @@ set_engine_option (struct lsquic_engine_settings *settings,
             return 0;
         }
         break;
+    case 18:
+        if (0 == strncmp(name, "qpack_enc_max_size", 18))
+        {
+            settings->es_qpack_enc_max_size = atoi(val);
+            return 0;
+        }
+        if (0 == strncmp(name, "qpack_dec_max_size", 18))
+        {
+            settings->es_qpack_dec_max_size = atoi(val);
+            return 0;
+        }
+        break;
     case 20:
         if (0 == strncmp(name, "max_header_list_size", 20))
         {
             settings->es_max_header_list_size = atoi(val);
+            return 0;
+        }
+        if (0 == strncmp(name, "init_max_streams_uni", 20))
+        {
+            settings->es_init_max_streams_uni = atoi(val);
+            return 0;
+        }
+        break;
+    case 21:
+        if (0 == strncmp(name, "qpack_enc_max_blocked", 21))
+        {
+            settings->es_qpack_enc_max_blocked = atoi(val);
+            return 0;
+        }
+        if (0 == strncmp(name, "qpack_dec_max_blocked", 21))
+        {
+            settings->es_qpack_dec_max_blocked = atoi(val);
+            return 0;
+        }
+        break;
+    case 24:
+        if (0 == strncmp(name, "init_max_stream_data_uni", 24))
+        {
+            settings->es_init_max_stream_data_uni = atoi(val);
+            return 0;
+        }
+        break;
+    case 31:
+        if (0 == strncmp(name, "init_max_stream_data_bidi_local", 31))
+        {
+            settings->es_init_max_stream_data_bidi_local = atoi(val);
+            return 0;
+        }
+    case 32:
+        if (0 == strncmp(name, "init_max_stream_data_bidi_remote", 32))
+        {
+            settings->es_init_max_stream_data_bidi_remote = atoi(val);
             return 0;
         }
         break;
@@ -1312,4 +1539,50 @@ destroy_lsquic_reader_ctx (struct reader_ctx *ctx)
 {
     (void) close(ctx->fd);
     free(ctx);
+}
+
+
+int
+sport_set_token (struct service_port *sport, const char *token_str)
+{
+    static const unsigned char c2b[0x100] =
+    {
+        [(int)'0'] = 0,
+        [(int)'1'] = 1,
+        [(int)'2'] = 2,
+        [(int)'3'] = 3,
+        [(int)'4'] = 4,
+        [(int)'5'] = 5,
+        [(int)'6'] = 6,
+        [(int)'7'] = 7,
+        [(int)'8'] = 8,
+        [(int)'9'] = 9,
+        [(int)'A'] = 0xA,
+        [(int)'B'] = 0xB,
+        [(int)'C'] = 0xC,
+        [(int)'D'] = 0xD,
+        [(int)'E'] = 0xE,
+        [(int)'F'] = 0xF,
+        [(int)'a'] = 0xA,
+        [(int)'b'] = 0xB,
+        [(int)'c'] = 0xC,
+        [(int)'d'] = 0xD,
+        [(int)'e'] = 0xE,
+        [(int)'f'] = 0xF,
+    };
+    unsigned char *token;
+    int len, i;
+
+    len = strlen(token_str);
+    token = malloc(len / 2);
+    if (!token)
+        return -1;
+    for (i = 0; i < len / 2; ++i)
+        token[i] = (c2b[ (int) token_str[i * 2] ] << 4)
+                 |  c2b[ (int) token_str[i * 2 + 1] ];
+
+    free(sport->sp_token_buf);
+    sport->sp_token_buf = token;
+    sport->sp_token_sz = len / 2;
+    return 0;
 }
