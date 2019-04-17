@@ -28,6 +28,8 @@ before_script:
     - cmake .
     - make
     - cd -
+    - git submodule init
+    - git submodule update
     - cmake -DBORINGSSL_DIR=$PWD/boringssl .
 script:
     # Now build lsquic-client
