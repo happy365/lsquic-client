@@ -368,6 +368,15 @@ lsquic_ev_log_generated_stop_waiting_frame (const lsquic_cid_t *cid,
 
 
 void
+lsquic_ev_log_generated_stop_sending_frame (const lsquic_cid_t *cid,
+                            lsquic_stream_id_t stream_id, uint16_t error_code)
+{
+    LCID("generated STOP_SENDING frame; stream ID: %"PRIu64"; error code: "
+                                            "%"PRIu16, stream_id, error_code);
+}
+
+
+void
 lsquic_ev_log_generated_http_headers (const lsquic_cid_t *cid,
                     lsquic_stream_id_t stream_id,
                     int is_server, const struct http_prio_frame *prio_frame,
@@ -425,4 +434,43 @@ lsquic_ev_log_generated_http_push_promise (const lsquic_cid_t *cid,
                 (char *) extra_headers->headers[i].name.iov_base,
                 (int)    extra_headers->headers[i].value.iov_len,
                 (char *) extra_headers->headers[i].value.iov_base);
+}
+
+
+void
+lsquic_ev_log_create_connection (const lsquic_cid_t *cid,
+                                    const struct sockaddr *local_sa,
+                                    const struct sockaddr *peer_sa)
+{
+    LCID("connection created");
+}
+
+
+void
+lsquic_ev_log_hsk_completed (const lsquic_cid_t *cid)
+{
+    LCID("handshake completed");
+}
+
+
+void
+lsquic_ev_log_zero_rtt (const lsquic_cid_t *cid)
+{
+    LCID("zero_rtt successful");
+}
+
+
+void
+lsquic_ev_log_check_certs (const lsquic_cid_t *cid, const lsquic_str_t **certs,
+                                                                size_t count)
+{
+    LCID("check certs");
+}
+
+
+void
+lsquic_ev_log_version_negotiation (const lsquic_cid_t *cid,
+                                        const char *action, const char *ver)
+{
+    LCID("version negotiation: %s version %s", action, ver);
 }

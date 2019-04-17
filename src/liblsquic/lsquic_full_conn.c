@@ -1948,6 +1948,8 @@ process_ver_neg_packet (struct full_conn *conn, lsquic_packet_in_t *packet_in)
         {
             versions |= 1 << version;
             LSQ_DEBUG("server supports version %s", lsquic_ver2str[version]);
+            EV_LOG_VER_NEG(LSQUIC_LOG_CONN_ID,
+                                        "supports", lsquic_ver2str[version]);
         }
     }
 
@@ -2140,6 +2142,8 @@ process_incoming_packet (struct full_conn *conn, lsquic_packet_in_t *packet_in)
             LSQ_DEBUG("end of version negotiation: agreed upon %s",
                                     lsquic_ver2str[conn->fc_ver_neg.vn_ver]);
             lsquic_send_ctl_verneg_done(&conn->fc_send_ctl);
+            EV_LOG_VER_NEG(LSQUIC_LOG_CONN_ID,
+                            "agreed", lsquic_ver2str[conn->fc_ver_neg.vn_ver]);
         }
         return process_regular_packet(conn, packet_in);
     }

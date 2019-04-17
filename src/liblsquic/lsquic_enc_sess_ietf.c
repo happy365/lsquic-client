@@ -1072,6 +1072,7 @@ iquic_esfi_get_peer_transport_params (enc_session_t *enc_session_p,
     struct enc_sess_iquic *const enc_sess = enc_session_p;
     const uint8_t *params_buf;
     size_t bufsz;
+    char params_str[0x200];
 
     SSL_get_peer_quic_transport_params(enc_sess->esi_ssl, &params_buf, &bufsz);
     if (!params_buf)
@@ -1084,7 +1085,9 @@ iquic_esfi_get_peer_transport_params (enc_session_t *enc_session_p,
     if (0 > lsquic_tp_decode(params_buf, bufsz,
                                                 trans_params))
     {
-        LSQ_DEBUG("could not parse peer transport parameters");
+        lsquic_hexdump(params_buf, bufsz, params_str, sizeof(params_str));
+        LSQ_DEBUG("could not parse peer transport parameters (%zd bytes):\n%s",
+            bufsz, params_str);
         return -1;
     }
 

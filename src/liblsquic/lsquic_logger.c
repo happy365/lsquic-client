@@ -74,6 +74,7 @@ enum lsq_log_level lsq_log_levels[N_LSQUIC_LOGGER_MODULES] = {
     [LSQLM_PACER]       = LSQ_LOG_WARN,
     [LSQLM_MIN_HEAP]    = LSQ_LOG_WARN,
     [LSQLM_HTTP1X]      = LSQ_LOG_WARN,
+    [LSQLM_QLOG]        = LSQ_LOG_WARN,
     [LSQLM_TRAPA]       = LSQ_LOG_WARN,
     [LSQLM_PURGA]       = LSQ_LOG_WARN,
     [LSQLM_HCSI_READER] = LSQ_LOG_WARN,
@@ -111,6 +112,7 @@ const char *const lsqlm_to_str[N_LSQUIC_LOGGER_MODULES] = {
     [LSQLM_PACER]       = "pacer",
     [LSQLM_MIN_HEAP]    = "min-heap",
     [LSQLM_HTTP1X]      = "http1x",
+    [LSQLM_QLOG]        = "qlog",
     [LSQLM_TRAPA]       = "trapa",
     [LSQLM_PURGA]       = "purga",
     [LSQLM_HCSI_READER] = "hcsi-reader",
@@ -234,7 +236,7 @@ lsquic_logger_log3 (enum lsq_log_level log_level,
                     const char *fmt, ...)
 {
     const int saved_errno = errno;
-    char cidbuf_[MAX_CID_LEN * 2];
+    char cidbuf_[MAX_CID_LEN * 2 + 1];
 
     if (g_llts != LLTS_NONE)
         print_timestamp();
@@ -257,7 +259,7 @@ lsquic_logger_log2 (enum lsq_log_level log_level,
                     const struct lsquic_cid *conn_id, const char *fmt, ...)
 {
     const int saved_errno = errno;
-    char cidbuf_[MAX_CID_LEN * 2];
+    char cidbuf_[MAX_CID_LEN * 2 + 1];
 
     if (g_llts != LLTS_NONE)
         print_timestamp();
@@ -415,6 +417,7 @@ lsquic_set_log_level (const char *level_str)
 }
 
 
+/* `out' must be at least MAX_CID_LEN * 2 + 1 characters long */
 void
 lsquic_cid2str (const lsquic_cid_t *cid, char *out)
 {
@@ -426,4 +429,5 @@ lsquic_cid2str (const lsquic_cid_t *cid, char *out)
         *out++ = hex[ cid->idbuf[i] >> 4 ];
         *out++ = hex[ cid->idbuf[i] & 0xF ];
     }
+    *out = '\0';
 }

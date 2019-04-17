@@ -39,6 +39,7 @@ SET(lsquic_STAT_SRCS
     lsquic_di_error.c
     lsquic_global.c
     lsquic_packet_common.c
+    lsquic_qlog.c
     lsquic_packet_gquic.c
     lsquic_ev_log.c
     lsquic_frame_common.c
@@ -49,10 +50,8 @@ SET(lsquic_STAT_SRCS
     lsquic_str.c
     lsquic_arr.c
     lsquic_hash.c
-    lsquic_xxhash.c
     lsquic_buf.c
     lsquic_min_heap.c
-    ../lshpack/lshpack.c
     lsquic_parse_Q044.c
     lsquic_parse_Q046.c
     lsquic_http1x_if.c
@@ -66,11 +65,22 @@ SET(lsquic_STAT_SRCS
     lsquic_hcsi_reader.c
     lsquic_hcso_writer.c
     lsquic_frab_list.c
-    ../lsqpack/lsqpack.c
+    ls-qpack/lsqpack.c
     lsquic_qenc_hdl.c
     lsquic_qdec_hdl.c
     lsquic_h3_prio.c
 )
+
+include_directories(ls-qpack)
+
+IF(PROJECT_NAME STREQUAL "openlitespeed")
+    INCLUDE_DIRECTORIES(${PROJECT_SOURCE_DIR}/src/spdy)
+ELSE()
+    SET(lsquic_STAT_SRCS ${lsquic_STAT_SRCS}
+        lsquic_xxhash.c
+        ../lshpack/lshpack.c
+    )
+ENDIF()
 
 
 

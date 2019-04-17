@@ -104,6 +104,7 @@ enum http_error_code
     HEC_EARLY_RESPONSE           =  0x0011,
     HEC_MISSING_SETTINGS         =  0x0012,
     HEC_UNEXPECTED_FRAME         =  0x0013,
+    HEC_REQUEST_REJECTED         =  0x14,
     HEC_GENERAL_PROTOCOL_ERROR   =  0x00FF,
     HEC_MALFORMED_FRAME          =  0x0100,    /* add frame type */
 };

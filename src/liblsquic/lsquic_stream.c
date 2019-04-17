@@ -179,6 +179,7 @@ enum stream_history_event
     SHE_USER_READ          =  'r',
     SHE_SHUTDOWN_READ      =  'R',
     SHE_RST_IN             =  's',
+    SHE_SS_IN              =  'S',
     SHE_RST_OUT            =  't',
     SHE_RST_ACKED          =  'T',
     SHE_FLUSH              =  'u',
@@ -939,7 +940,29 @@ void
 lsquic_stream_stop_sending_in (struct lsquic_stream *stream,
                                                         uint16_t error_code)
 {
-    LSQ_WARN("%s: do something", __func__); /* TODO */
+    if (stream->stream_flags & STREAM_SS_RECVD)
+    {
+        LSQ_DEBUG("ignore duplicate STOP_SENDING frame");
+        return;
+    }
+
+    SM_HISTORY_APPEND(stream, SHE_SS_IN);
+    stream->stream_flags |= STREAM_SS_RECVD;
+
+    /* Let user collect error: */
+    maybe_conn_to_tickable_if_readable(stream);
+
+    lsquic_sfcw_consume_rem(&stream->fc);
+    drop_frames_in(stream);
+    drop_buffered_data(stream);
+    maybe_elide_stream_frames(stream);
+
+    if (!(stream->stream_flags & (STREAM_RST_SENT|STREAM_FIN_SENT))
+                                    && !(stream->sm_qflags & SMQF_SEND_RST))
+        lsquic_stream_reset_ext(stream, error_code, 0);
+
+    maybe_finish_stream(stream);
+    maybe_schedule_call_on_close(stream);
 }
 
 
@@ -3518,6 +3541,16 @@ hq_read (void *ctx, const unsigned char *buf, size_t sz, int fin)
             LSQ_DEBUG("HQ frame type 0x%"PRIX64" at offset %"PRIu64", size %"PRIu64,
                 filter->hqfi_type, stream->read_offset + (unsigned) (p - buf),
                 filter->hqfi_left);
+            if (filter->hqfi_type == HQFT_HEADERS)
+            {
+                if (0 == (filter->hqfi_flags & HQFI_FLAG_GOT_HEADERS))
+                    filter->hqfi_flags |= HQFI_FLAG_GOT_HEADERS;
+                else
+                {
+                    filter->hqfi_type = (1ull << 62) - 1;
+                    LSQ_DEBUG("Ignoring HEADERS frame");
+                }
+            }
             if (filter->hqfi_left > 0)
             {
                 if (filter->hqfi_type == HQFT_DATA)
@@ -3829,4 +3862,11 @@ lsquic_stream_qdec_unblocked (struct lsquic_stream *stream)
     filter->hqfi_flags &= ~HQFI_FLAG_BLOCKED;
     stream->conn_pub->cp_flags |= CP_STREAM_UNBLOCKED;
     LSQ_DEBUG("QPACK decoder unblocked");
+}
+
+
+int
+lsquic_stream_is_rejected (const struct lsquic_stream *stream)
+{
+    return stream->stream_flags & STREAM_SS_RECVD;
 }

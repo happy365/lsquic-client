@@ -156,6 +156,11 @@ struct parse_funcs
     int
     (*pf_parse_stop_sending_frame) (const unsigned char *buf, size_t buf_len,
         lsquic_stream_id_t *stream_id, uint16_t *error_code);
+    unsigned
+    (*pf_stop_sending_frame_size) (lsquic_stream_id_t);
+    int
+    (*pf_gen_stop_sending_frame) (unsigned char *buf, size_t buf_len,
+                                    lsquic_stream_id_t, uint16_t error_code);
     int
     (*pf_gen_connect_close_frame) (unsigned char *buf, size_t buf_len,
         int app_error, unsigned error_code, const char *reason, int reason_len);

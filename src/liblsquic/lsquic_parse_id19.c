@@ -47,6 +47,11 @@
 #define CHECK_SPACE(need, pstart, pend)  \
     do { if ((intptr_t) (need) > ((pend) - (pstart))) { return -1; } } while (0)
 
+static int
+id19_gen_one_varint (unsigned char *, size_t, unsigned char, uint64_t);
+
+static unsigned
+id19_one_varint_size (uint64_t);
 
 static void
 id19_parse_packet_in_finish (lsquic_packet_in_t *packet_in,
@@ -743,6 +748,33 @@ id19_parse_stop_sending_frame (const unsigned char *buf, size_t buf_len,
     p += 2;
 
     return p - buf;
+}
+
+
+static int
+id19_gen_stop_sending_frame (unsigned char *buf, size_t len,
+                            lsquic_stream_id_t stream_id, uint16_t error_code)
+{
+    int w;
+
+    w = id19_gen_one_varint(buf, len, 0x05, stream_id);
+    if (w > 0 && w + sizeof(error_code) <= len)
+    {
+#if __BYTE_ORDER == __LITTLE_ENDIAN
+        error_code = bswap_16(error_code);
+#endif
+        memcpy(buf + w, &error_code, sizeof(error_code));
+        return w + sizeof(error_code);
+    }
+    else
+        return -1;
+}
+
+
+static unsigned
+id19_stop_sending_frame_size (lsquic_stream_id_t val)
+{
+    return id19_one_varint_size(val) + sizeof(uint16_t);
 }
 
 
@@ -1758,6 +1790,8 @@ const struct parse_funcs lsquic_parse_funcs_id19 =
     .pf_parse_max_stream_data_frame   =  id19_parse_max_stream_data_frame,
     .pf_max_stream_data_frame_size    =  id19_max_stream_data_frame_size,
     .pf_parse_stop_sending_frame      =  id19_parse_stop_sending_frame,
+    .pf_gen_stop_sending_frame        =  id19_gen_stop_sending_frame,
+    .pf_stop_sending_frame_size       =  id19_stop_sending_frame_size,
     .pf_parse_new_token_frame         =  id19_parse_new_token_frame,
     .pf_new_connection_id_frame_size  =  id19_new_connection_id_frame_size,
     .pf_gen_new_connection_id_frame   =  id19_gen_new_connection_id_frame,

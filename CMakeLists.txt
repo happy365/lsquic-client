@@ -144,7 +144,6 @@ ENDIF()
 
 SET(CMAKE_INCLUDE_CURRENT_DIR ON)
 INCLUDE_DIRECTORIES(include src/lshpack)
-INCLUDE_DIRECTORIES(include src/lsqpack)
 IF(CMAKE_SYSTEM_NAME STREQUAL "FreeBSD" OR CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     # Find libevent on FreeBSD:
     include_directories( /usr/local/include )

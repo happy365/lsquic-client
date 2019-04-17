@@ -24,7 +24,7 @@ extern "C" {
 #endif
 
 #define LSQUIC_MAJOR_VERSION 1
-#define LSQUIC_MINOR_VERSION 20
+#define LSQUIC_MINOR_VERSION 21
 #define LSQUIC_PATCH_VERSION 0
 
 /**
@@ -265,7 +265,8 @@ struct lsquic_stream_if {
 #define LSQUIC_DF_INIT_MAX_STREAM_DATA_BIDI_REMOTE_CLIENT 0
 #define LSQUIC_DF_INIT_MAX_STREAM_DATA_BIDI_LOCAL_CLIENT LSQUIC_DF_SFCW_CLIENT
 #define LSQUIC_DF_INIT_MAX_STREAMS_BIDI LSQUIC_DF_MAX_STREAMS_IN
-#define LSQUIC_DF_INIT_MAX_STREAMS_UNI 100
+#define LSQUIC_DF_INIT_MAX_STREAMS_UNI_CLIENT 100
+#define LSQUIC_DF_INIT_MAX_STREAMS_UNI_SERVER 3
 /* XXX What's a good value here? */
 #define LSQUIC_DF_INIT_MAX_STREAM_DATA_UNI_CLIENT   (32 * 1024)
 #define LSQUIC_DF_INIT_MAX_STREAM_DATA_UNI_SERVER   (12 * 1024)
@@ -582,7 +583,8 @@ struct lsquic_engine_settings {
      *
      * This is a transport parameter.
      *
-     * Default value is @ref LSQUIC_DF_INIT_MAX_STREAMS_UNI.
+     * Default value is @ref LSQUIC_DF_INIT_MAX_STREAMS_UNI_CLIENT or
+     * @ref LSQUIC_DF_INIT_MAX_STREAM_DATA_UNI_SERVER.
      */
     unsigned        es_init_max_streams_uni;
 
@@ -1125,6 +1127,13 @@ lsquic_stream_get_ctx (const lsquic_stream_t *s);
 /** Returns true if this is a pushed stream */
 int
 lsquic_stream_is_pushed (const lsquic_stream_t *s);
+
+/**
+ * Returns true if this stream was rejected, false otherwise.  Use this as
+ * an aid to distinguish between errors.
+ */
+int
+lsquic_stream_is_rejected (const lsquic_stream_t *s);
 
 /**
  * Refuse pushed stream.  Call it from @ref on_new_stream.

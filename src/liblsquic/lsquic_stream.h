@@ -184,6 +184,7 @@ enum stream_flags {
     STREAM_DATA_RECVD   = 1 << 25,  /* Cache stream state calculation */
     STREAM_CRITICAL     = 1 << 26,  /* This is a critical stream */
     STREAM_HDRS_FLUSHED = 1 << 27,  /* Only used in buffered packets mode */
+    STREAM_SS_RECVD     = 1 << 28,  /* Received STOP_SENDING frame */
 };
 
 struct lsquic_stream
@@ -326,7 +327,8 @@ lsquic_stream_destroy (lsquic_stream_t *);
  * the error.
  */
 #define lsquic_stream_is_reset(stream) \
-    (((stream)->stream_flags & (STREAM_RST_RECVD|STREAM_RST_SENT)) \
+    (((stream)->stream_flags & \
+                    (STREAM_RST_RECVD|STREAM_RST_SENT|STREAM_SS_RECVD)) \
         || ((stream)->sm_qflags & SMQF_SEND_RST))
 
 /* Data that from the network gets inserted into the stream using

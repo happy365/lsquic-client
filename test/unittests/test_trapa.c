@@ -42,9 +42,9 @@ static const struct trapa_test tests[] =
         .params = {
             TP_DEFAULT_VALUES,
         },
-        .enc_len = 0,
-        .dec_len = 0,
+        .enc_len = 2,
         .encoded =
+     /* Overall length */   "\x00\x00"
     /* Trailer to make the end easily visible in gdb: */
     "\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF\xFF"
     },
@@ -59,9 +59,9 @@ static const struct trapa_test tests[] =
             .tp_idle_timeout = 10 * 1000,
             .tp_max_ack_delay = TP_DEF_MAX_ACK_DELAY,
         },
-        .enc_len = 32,
-        .dec_len = 32,
+        .enc_len = 34,
         .encoded =
+     /* Overall length */   "\x00\x20"
      /* Idle timeout */     "\x00\x01\x00\x02\x67\x10"
      /* Packet size */      "\x00\x03\x00\x01\x00"
      /* Max data */         "\x00\x04\x00\x04\x80\x00\xAA\xBB"
@@ -98,9 +98,9 @@ static const struct trapa_test tests[] =
             .tp_disable_migration = 1,
             .tp_max_packet_size = 0x333,
         },
-        .enc_len = 30,
-        .dec_len = 30,
+        .enc_len = 32,
         .encoded =
+     /* Overall length */   "\x00\x1E"
      /* Packet size */      "\x00\x03\x00\x02\x43\x33"
      /* Max data */         "\x00\x04\x00\x04\x80\x12\x34\x56"
      /* Bidi local */       "\x00\x05\x00\x08\xC0\x00\x00\x00\xAB\xCD\xEF\x88"
@@ -127,9 +127,9 @@ static const struct trapa_test tests[] =
                 .srst = "\x30\x31\x32\x33\x34\x35\x36\x37\x38\x39\x3A\x3B\x3C\x3D\x3E\x3F",
             },
         },
-        .enc_len = 0x3E,
-        .dec_len = 0x3E,
+        .enc_len = 0x3E + 2,
         .encoded =
+     /* Overall length */   "\x00\x3E"
      /* Preferred Address */"\x00\x0D"
                             "\x00\x34"
                             "\x01\x02\x03\x04"
@@ -159,23 +159,29 @@ static void
 run_test (const struct trapa_test *test)
 {
     struct transport_params decoded_params;
+    size_t dec_len;
     int s;
     unsigned char buf[ENC_BUF_SZ];
 
     if (test->flags & TEST_ENCODE)
     {
         s = lsquic_tp_encode(&test->params, buf, sizeof(buf));
-        assert(s >= 0);
+        assert(s > 0);
         assert((size_t) s == test->enc_len);
         assert(0 == memcmp(test->encoded, buf, s));
     }
 
     if (test->flags & TEST_DECODE)
     {
-        s = lsquic_tp_decode(test->encoded, test->dec_len, &decoded_params);
+        if (test->dec_len)
+            dec_len = test->dec_len;
+        else
+            dec_len = sizeof(buf);
+        s = lsquic_tp_decode(test->encoded, dec_len, &decoded_params);
         if (!test->expect_decode_err)
         {
-            assert(s == 0);
+            assert(s > 0);
+            assert((size_t) s == test->enc_len);
             s = params_are_equal(&test->params, &decoded_params);
             assert(s);
         }
@@ -207,7 +213,7 @@ decode_file (const char *name)
 
     fclose(file);
 
-    printf("decoded params from %s: %d (%s)\n", name, s, s == 0 ? "OK" : "FAIL");
+    printf("decoded params from %s: %d (%s)\n", name, s, s > 0 ? "OK" : "FAIL");
 }
 
 

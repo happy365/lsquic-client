@@ -18,6 +18,8 @@ ELSE()
     ENDIF()
 ENDIF()
 
+include_directories(../../src/liblsquic/ls-qpack)
+
 SET(TESTS
     ackgen_gquic_be
     ackgen_gquic_le
@@ -46,6 +48,7 @@ SET(TESTS
     hkdf
     lsquic_hash
     malo
+    qlog
     packet_out
     packno_len
     parse_packet_in

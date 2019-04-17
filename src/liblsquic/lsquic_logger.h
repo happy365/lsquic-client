@@ -71,6 +71,7 @@ enum lsquic_logger_module {
     LSQLM_PACER,
     LSQLM_MIN_HEAP,
     LSQLM_HTTP1X,
+    LSQLM_QLOG,
     LSQLM_TRAPA,
     LSQLM_PURGA,
     LSQLM_HCSI_READER,
@@ -144,7 +145,7 @@ lsquic_logger_log2 (enum lsq_log_level, enum lsquic_logger_module,
 #   define LSQ_LOG2C(level, ...) do {                                        \
         if (LSQ_LOG_ENABLED(level))                                          \
         {                                                                    \
-            char cidbuf_[MAX_CID_LEN * 2];                                   \
+            char cidbuf_[MAX_CID_LEN * 2 + 1];                               \
             lsquic_logger_log2(level, LSQUIC_LOGGER_MODULE,                  \
                                        LSQUIC_LOG_CONN_ID, __VA_ARGS__);     \
         }                                                                    \
@@ -164,7 +165,7 @@ lsquic_logger_log1 (enum lsq_log_level, enum lsquic_logger_module,
 #   define LSQ_LOG1C(level, ...) do {                                        \
         if (LSQ_LOG_ENABLED(level))                                          \
         {                                                                    \
-            char cidbuf_[MAX_CID_LEN * 2];                                   \
+            char cidbuf_[MAX_CID_LEN * 2 + 1];                               \
             lsquic_logger_log1(level, LSQUIC_LOGGER_MODULE, __VA_ARGS__);    \
         }                                                                    \
     } while (0)
@@ -182,7 +183,7 @@ lsquic_logger_log0 (enum lsq_log_level, const char *format, ...)
 #   define LSQ_LOG0C(level, ...) do {                                        \
         if (LSQ_LOG_ENABLED(level))                                          \
         {                                                                    \
-            char cidbuf_[MAX_CID_LEN * 2];                                   \
+            char cidbuf_[MAX_CID_LEN * 2 + 1];                               \
             lsquic_logger_log0(level, __VA_ARGS__);                          \
         }                                                                    \
     } while (0)

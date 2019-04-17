@@ -77,7 +77,7 @@ lsquic_tp_encode (const struct transport_params *params,
                   unsigned char *const buf, size_t bufsz)
 {
     unsigned char *p;
-    size_t need = 0;
+    size_t need = 2;
     uint16_t u16;
     enum transport_param_id tpi;
     unsigned bits[MAX_TPI + 1];
@@ -138,6 +138,8 @@ lsquic_tp_encode (const struct transport_params *params,
         *p++ = tpval;                                                   \
 } while (0)
 
+    WRITE_UINT_TO_P(need - 2 + buf - p, 16);
+
     for (tpi = 0; tpi <= MAX_TPI; ++tpi)
         if (NUMERIC_TRANS_PARAMS & (1 << tpi))
         {
@@ -193,6 +195,14 @@ lsquic_tp_decode (const unsigned char *const buf, size_t bufsz,
     *params = TP_INITIALIZER();
 
         params->tp_flags |= TRAPA_SERVER;
+
+    if (end - p < 2)
+        return -1;
+    READ_UINT(len, 16, p, 2);
+    p += 2;
+    if (len > end - p)
+        return -1;
+    end = p + len;
 
 #define EXPECT_LEN(expected_len) do {                               \
     if (expected_len != len)                                        \
@@ -330,10 +340,10 @@ lsquic_tp_decode (const unsigned char *const buf, size_t bufsz,
         }
     }
 
-    if (p == end)
-        return 0;
-    else
+    if (p != end)
         return -1;
+
+    return (int) (end - buf);
 #undef EXPECT_LEN
 }
 

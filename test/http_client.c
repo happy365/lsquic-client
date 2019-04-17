@@ -719,6 +719,12 @@ http_client_on_read (lsquic_stream_t *stream, lsquic_stream_ctx_t *st_h)
             LSQ_NOTICE("emptied the buffer in 'once' mode");
             break;
         }
+        else if (lsquic_stream_is_rejected(stream))
+        {
+            LSQ_NOTICE("stream was rejected");
+            lsquic_stream_close(stream);
+            break;
+        }
         else
         {
             LSQ_ERROR("could not read: %s", strerror(errno));
