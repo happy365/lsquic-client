@@ -9,10 +9,24 @@
 
 #include <stdint.h>
 
+#define MAX_CID_LEN 18
+#define GQUIC_CID_LEN 8
+
 /**
  * Connection ID
  */
-typedef uint64_t lsquic_cid_t;
+typedef struct lsquic_cid
+{
+    uint_fast8_t    len;
+    uint8_t         idbuf[MAX_CID_LEN];
+}
+lsquic_cid_t;
+
+#define LSQUIC_CIDS_EQ(a, b) ( \
+    (a)->len == (b)->len && 0 == memcmp((a)->idbuf, (b)->idbuf, (a)->len))
+
+/** Stream ID */
+typedef uint64_t lsquic_stream_id_t;
 
 /** LSQUIC engine */
 typedef struct lsquic_engine lsquic_engine_t;

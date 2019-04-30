@@ -12,11 +12,15 @@
 #include "lsquic_rechist.h"
 #include "lsquic_util.h"
 #include "lsquic.h"
+#include "lsquic_hash.h"
+#include "lsquic_conn.h"
+
+static struct lsquic_conn lconn = LSCONN_INITIALIZER_CIDLEN(lconn, 0);
 
 static const struct parse_funcs *const pf = select_pf_by_ver(LSQVER_035);
 
 static lsquic_packno_t
-n_acked (const ack_info_t *acki)
+n_acked (const struct ack_info *acki)
 {
     lsquic_packno_t n = 0;
     unsigned i;
@@ -38,10 +42,10 @@ test1 (void)
         0x00,                   /* Number of timestamps */
     };
 
-    ack_info_t acki;
+    struct ack_info acki;
     memset(&acki, 0xF1, sizeof(acki));
 
-    int len = pf->pf_parse_ack_frame(ack_buf, sizeof(ack_buf), &acki);
+    int len = pf->pf_parse_ack_frame(ack_buf, sizeof(ack_buf), &acki, 0);
     assert(("Parsed length is correct (8)", len == sizeof(ack_buf)));
     assert(("Number of ranges is 1", acki.n_ranges == 1));
     assert(("Largest acked is 0x1234", acki.ranges[0].high == 0x1234));
@@ -54,7 +58,7 @@ test1 (void)
         size_t sz;
         for (sz = 1; sz < sizeof(ack_buf); ++sz)
         {
-            len = pf->pf_parse_ack_frame(ack_buf, sz, &acki);
+            len = pf->pf_parse_ack_frame(ack_buf, sz, &acki, 0);
             assert(("Parsing truncated frame failed", len < 0));
         }
     }
@@ -100,10 +104,10 @@ test2 (void)
         {   0x4,    0x1 },
     };
 
-    ack_info_t acki;
+    struct ack_info acki;
     memset(&acki, 0xF1, sizeof(acki));
 
-    int len = pf->pf_parse_ack_frame(ack_buf, sizeof(ack_buf), &acki);
+    int len = pf->pf_parse_ack_frame(ack_buf, sizeof(ack_buf), &acki, 0);
     assert(("Parsed length is correct (29)", len == sizeof(ack_buf)));
     assert(("Number of ranges is 4", acki.n_ranges == 4));
     assert(("Largest acked is 0x1234", acki.ranges[0].high == 0x1234));
@@ -119,7 +123,7 @@ test2 (void)
         size_t sz;
         for (sz = 1; sz < sizeof(ack_buf); ++sz)
         {
-            len = pf->pf_parse_ack_frame(ack_buf, sz, &acki);
+            len = pf->pf_parse_ack_frame(ack_buf, sz, &acki, 0);
             assert(("Parsing truncated frame failed", len < 0));
         }
     }
@@ -151,10 +155,10 @@ test3 (void)
         {   3,      1, },
     };
 
-    ack_info_t acki;
+    struct ack_info acki;
     memset(&acki, 0xF1, sizeof(acki));
 
-    int len = pf->pf_parse_ack_frame(ack_buf, sizeof(ack_buf), &acki);
+    int len = pf->pf_parse_ack_frame(ack_buf, sizeof(ack_buf), &acki, 0);
     assert(("Parsed length is correct (9)", len == sizeof(ack_buf)));
     assert(("Number of ranges is 2", acki.n_ranges == 2));
     assert(("Largest acked is 6", acki.ranges[0].high == 6));
@@ -170,7 +174,7 @@ test3 (void)
         size_t sz;
         for (sz = 1; sz < sizeof(ack_buf); ++sz)
         {
-            len = pf->pf_parse_ack_frame(ack_buf, sz, &acki);
+            len = pf->pf_parse_ack_frame(ack_buf, sz, &acki, 0);
             assert(("Parsing truncated frame failed", len < 0));
         }
     }
@@ -201,10 +205,10 @@ test4 (void)
         {   1,      1, },
     };
 
-    ack_info_t acki;
+    struct ack_info acki;
     memset(&acki, 0xF1, sizeof(acki));
 
-    int len = pf->pf_parse_ack_frame(ack_buf, sizeof(ack_buf), &acki);
+    int len = pf->pf_parse_ack_frame(ack_buf, sizeof(ack_buf), &acki, 0);
     assert(("Parsed length is correct (9)", len == sizeof(ack_buf)));
     assert(("Number of ranges is 2", acki.n_ranges == 2));
     assert(("Largest acked is 3", acki.ranges[0].high == 3));
@@ -220,7 +224,7 @@ test4 (void)
         size_t sz;
         for (sz = 1; sz < sizeof(ack_buf); ++sz)
         {
-            len = pf->pf_parse_ack_frame(ack_buf, sz, &acki);
+            len = pf->pf_parse_ack_frame(ack_buf, sz, &acki, 0);
             assert(("Parsing truncated frame failed", len < 0));
         }
     }
@@ -255,10 +259,10 @@ test5 (void)
         {   0x23456768,      1, },
     };
 
-    ack_info_t acki;
+    struct ack_info acki;
     memset(&acki, 0xF1, sizeof(acki));
 
-    int len = pf->pf_parse_ack_frame(ack_buf, sizeof(ack_buf), &acki);
+    int len = pf->pf_parse_ack_frame(ack_buf, sizeof(ack_buf), &acki, 0);
     assert(("Parsed length is correct (9)", len == sizeof(ack_buf)));
     assert(("Number of ranges is 2", acki.n_ranges == 2));
     assert(("Largest acked is 0x23456789", acki.ranges[0].high == 0x23456789));
@@ -274,7 +278,7 @@ test5 (void)
         size_t sz;
         for (sz = 1; sz < sizeof(ack_buf); ++sz)
         {
-            len = pf->pf_parse_ack_frame(ack_buf, sz, &acki);
+            len = pf->pf_parse_ack_frame(ack_buf, sz, &acki, 0);
             assert(("Parsing truncated frame failed", len < 0));
         }
     }
@@ -304,10 +308,10 @@ test6 (void)
         {   0xABCD23456768,      1, },
     };
 
-    ack_info_t acki;
+    struct ack_info acki;
     memset(&acki, 0xF1, sizeof(acki));
 
-    int len = pf->pf_parse_ack_frame(ack_buf, sizeof(ack_buf), &acki);
+    int len = pf->pf_parse_ack_frame(ack_buf, sizeof(ack_buf), &acki, 0);
     assert(("Parsed length is correct", len == sizeof(ack_buf)));
     assert(("Number of ranges is 2", acki.n_ranges == 2));
     assert(("Largest acked is 0xABCD23456789", acki.ranges[0].high == 0xABCD23456789));
@@ -323,7 +327,7 @@ test6 (void)
         size_t sz;
         for (sz = 1; sz < sizeof(ack_buf); ++sz)
         {
-            len = pf->pf_parse_ack_frame(ack_buf, sz, &acki);
+            len = pf->pf_parse_ack_frame(ack_buf, sz, &acki, 0);
             assert(("Parsing truncated frame failed", len < 0));
         }
     }
@@ -341,7 +345,7 @@ test_max_ack (void)
     unsigned char buf[1500];
     struct ack_info acki;
 
-    lsquic_rechist_init(&rechist, 12345);
+    lsquic_rechist_init(&rechist, &lconn, 0);
     now = lsquic_time_now();
 
     for (i = 1; i <= 300; ++i)
@@ -357,7 +361,7 @@ test_max_ack (void)
         (gaf_rechist_first_f)        lsquic_rechist_first,
         (gaf_rechist_next_f)         lsquic_rechist_next,
         (gaf_rechist_largest_recv_f) lsquic_rechist_largest_recv,
-        &rechist, now, &has_missing, &largest);
+        &rechist, now, &has_missing, &largest, NULL);
     assert(sz[0] > 0);
     assert(sz[0] <= (int) sizeof(buf));
     assert(has_missing);
@@ -365,7 +369,7 @@ test_max_ack (void)
     assert(0 == buf[ sz[0] - 1 ]);  /* Number of timestamps */
     assert(0xAA == buf[ sz[0] ]);
 
-    sz[1] = pf->pf_parse_ack_frame(buf, sizeof(buf), &acki);
+    sz[1] = pf->pf_parse_ack_frame(buf, sizeof(buf), &acki, 0);
     assert(sz[1] == sz[0]);
     assert(256 == acki.n_ranges);
 
@@ -394,7 +398,7 @@ test_ack_truncation (void)
     struct ack_info acki;
     size_t bufsz;
 
-    lsquic_rechist_init(&rechist, 12345);
+    lsquic_rechist_init(&rechist, &lconn, 0);
     now = lsquic_time_now();
 
     for (i = 1; i <= 300; ++i)
@@ -411,7 +415,7 @@ test_ack_truncation (void)
             (gaf_rechist_first_f)        lsquic_rechist_first,
             (gaf_rechist_next_f)         lsquic_rechist_next,
             (gaf_rechist_largest_recv_f) lsquic_rechist_largest_recv,
-            &rechist, now, &has_missing, &largest);
+            &rechist, now, &has_missing, &largest, NULL);
         assert(sz[0] > 0);
         assert(sz[0] <= (int) bufsz);
         assert(has_missing);
@@ -419,7 +423,7 @@ test_ack_truncation (void)
         assert(0 == buf[ sz[0] - 1 ]);  /* Number of timestamps */
         assert(0xAA == buf[ sz[0] ]);
 
-        sz[1] = pf->pf_parse_ack_frame(buf, sizeof(buf), &acki);
+        sz[1] = pf->pf_parse_ack_frame(buf, sizeof(buf), &acki, 0);
         assert(sz[1] == sz[0]);
         assert(acki.n_ranges < 256);
 

@@ -15,14 +15,19 @@
 #include "lsquic_mm.h"
 #include "lsquic_engine_public.h"
 #include "lsquic_packet_common.h"
+#include "lsquic_packet_gquic.h"
 #include "lsquic_packet_in.h"
 #include "lsquic_packet_out.h"
 #include "lsquic_parse.h"
 #include "lsquic_sfcw.h"
+#include "lsquic_varint.h"
+#include "lsquic_hq.h"
+#include "lsquic_hash.h"
 #include "lsquic_stream.h"
 #include "lsquic_logger.h"
 #include "lsquic_ev_log.h"
 #include "lsquic_conn.h"
+#include "lsquic_enc_sess.h"
 
 typedef char _stream_rec_arr_is_at_most_64bytes[
                                 (sizeof(struct stream_rec_arr) <= 64)? 1: - 1];
@@ -188,7 +193,7 @@ lsquic_packet_out_new (struct lsquic_mm *mm, struct malo *malo, int use_cid,
 {
     lsquic_packet_out_t *packet_out;
     enum packet_out_flags flags;
-    unsigned short header_size, max_size;
+    size_t header_size, tag_len, max_size;
 
     flags = bits << POBIT_SHIFT;
     if (ver_tag)
@@ -211,16 +216,17 @@ lsquic_packet_out_new (struct lsquic_mm *mm, struct malo *malo, int use_cid,
         }
     }
 
-    header_size = lsquic_po_header_length(lconn, flags);
+    header_size = lconn->cn_pf->pf_packout_max_header_size(lconn, flags);
+    tag_len = lconn->cn_esf_c->esf_tag_len;
     max_size = lconn->cn_pack_size;
-    if (header_size + QUIC_PACKET_HASH_SZ >= max_size)
+    if (header_size + tag_len >= max_size)
     {
         errno = EINVAL;
         return NULL;
     }
 
     packet_out = lsquic_mm_get_packet_out(mm, malo, max_size - header_size
-                                                - QUIC_PACKET_HASH_SZ);
+                                                - tag_len);
     if (!packet_out)
         return NULL;
 
@@ -275,7 +281,7 @@ lsquic_packet_out_destroy (lsquic_packet_out_t *packet_out,
  */
 unsigned
 lsquic_packet_out_elide_reset_stream_frames (lsquic_packet_out_t *packet_out,
-                                             uint32_t stream_id)
+                                             lsquic_stream_id_t stream_id)
 {
     struct packet_out_srec_iter posi;
     struct stream_rec *srec;
@@ -314,9 +320,8 @@ lsquic_packet_out_elide_reset_stream_frames (lsquic_packet_out_t *packet_out,
                         packet_out->po_data_sz - srec->sr_off - srec->sr_len);
                 packet_out->po_data_sz -= srec->sr_len;
 
-                /* See what we can do with the stream */
+                lsquic_stream_acked(srec->sr_stream, srec->sr_frame_type);
                 srec->sr_frame_type = 0;
-                lsquic_stream_acked(srec->sr_stream);
             }
         }
     }
@@ -357,7 +362,7 @@ lsquic_packet_out_ack_streams (lsquic_packet_out_t *packet_out)
     struct packet_out_srec_iter posi;
     struct stream_rec *srec;
     for (srec = posi_first(&posi, packet_out); srec; srec = posi_next(&posi))
-        lsquic_stream_acked(srec->sr_stream);
+        lsquic_stream_acked(srec->sr_stream, srec->sr_frame_type);
 }
 
 
@@ -425,7 +430,7 @@ struct split_reader_ctx
     unsigned        off;
     unsigned        len;
     signed char     fin;
-    unsigned char   buf[QUIC_MAX_PAYLOAD_SZ / 2 + 1];
+    unsigned char   buf[GQUIC_MAX_PAYLOAD_SZ / 2 + 1];
 };
 
 
@@ -738,7 +743,8 @@ lsquic_packet_out_turn_on_fin (struct lsquic_packet_out *packet_out,
             if (last_offset == stream->tosend_off)
             {
                 pf->pf_turn_on_fin(packet_out->po_data + srec->sr_off);
-                EV_LOG_UPDATED_STREAM_FRAME(lsquic_stream_cid(stream),
+                EV_LOG_UPDATED_STREAM_FRAME(
+                    lsquic_conn_log_cid(lsquic_stream_conn(stream)),
                     pf, packet_out->po_data + srec->sr_off, srec->sr_len);
                 return 0;
             }

@@ -13,12 +13,14 @@
 #ifdef WIN32
 #include <vc_compat.h>
 #endif
+#include <sys/queue.h>
 
 #include "lsquic.h"
 #include "lsquic_types.h"
 #include "lsquic_int_types.h"
 #include "lsquic_attq.h"
 #include "lsquic_malo.h"
+#include "lsquic_hash.h"
 #include "lsquic_conn.h"
 
 

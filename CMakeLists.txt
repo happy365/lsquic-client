@@ -26,10 +26,16 @@ IF (NOT MSVC)
 
 SET(MY_CMAKE_FLAGS "${MY_CMAKE_FLAGS} -Wall -Wextra -Wno-unused-parameter")
 SET(MY_CMAKE_FLAGS "${MY_CMAKE_FLAGS} -fno-omit-frame-pointer")
+INCLUDE(CheckCCompilerFlag)
+CHECK_C_COMPILER_FLAG(-Wno-implicit-fallthrough HAS_NO_IMPLICIT_FALLTHROUGH)
+IF (HAS_NO_IMPLICIT_FALLTHROUGH)
+    SET(MY_CMAKE_FLAGS "${MY_CMAKE_FLAGS} -Wno-implicit-fallthrough")
+ENDIF()
 
 IF(CMAKE_COMPILER_IS_GNUCC AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 4.9.3)
     SET(MY_CMAKE_FLAGS "${MY_CMAKE_FLAGS} -Wno-missing-field-initializers")
 ENDIF()
+
 IF(CMAKE_BUILD_TYPE STREQUAL "Debug")
     SET(MY_CMAKE_FLAGS "${MY_CMAKE_FLAGS} -O0 -g3")
     IF(CMAKE_C_COMPILER MATCHES "clang" AND
@@ -41,7 +47,6 @@ IF(CMAKE_BUILD_TYPE STREQUAL "Debug")
     #SET(LIBS ${LIBS} fiu)
 ELSE()
     SET(MY_CMAKE_FLAGS "${MY_CMAKE_FLAGS} -O3 -g0")
-    SET(MY_CMAKE_FLAGS "${MY_CMAKE_FLAGS} -DNDEBUG")
     # Comment out the following line to compile out debug messages:
     #SET(MY_CMAKE_FLAGS "${MY_CMAKE_FLAGS} -DLSQUIC_LOWEST_LOG_LEVEL=LSQ_LOG_INFO")
 ENDIF()
@@ -70,7 +75,6 @@ IF(CMAKE_BUILD_TYPE STREQUAL "Debug")
     #SET(LIBS ${LIBS} fiu)
 ELSE()
     SET(MY_CMAKE_FLAGS "${MY_CMAKE_FLAGS} -Ox")
-    SET(MY_CMAKE_FLAGS "${MY_CMAKE_FLAGS} -DNDEBUG")
     # Comment out the following line to compile out debug messages:
     #SET(MY_CMAKE_FLAGS "${MY_CMAKE_FLAGS} -DLSQUIC_LOWEST_LOG_LEVEL=LSQ_LOG_INFO")
 ENDIF()
@@ -193,6 +197,7 @@ ENDIF()
 SET(LIBS lsquic ${EVENT_LIB} ${BORINGSSL_LIB_ssl} ${BORINGSSL_LIB_crypto} ${ZLIB_LIB} ${LIBS})
 
 IF (NOT MSVC)
+
 add_executable(http_client
     test/http_client.c
     test/prog.c
@@ -202,6 +207,7 @@ LIST(APPEND LIBS pthread m)
 
 #MSVC
 ELSE()
+
 add_executable(http_client
     test/http_client.c
     test/prog.c
@@ -220,7 +226,7 @@ add_subdirectory(src)
 
 add_subdirectory(test)
 
-IF(NOT (CMAKE_C_FLAGS MATCHES "-DNDEBUG"))
+IF(CMAKE_BUILD_TYPE STREQUAL "Debug")
     # Our test framework relies on assertions, only compile if assertions are
     # enabled.
     #

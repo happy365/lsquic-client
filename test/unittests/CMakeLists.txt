@@ -3,12 +3,22 @@ INCLUDE_DIRECTORIES(../../src/liblsquic)
 
 ENABLE_TESTING()
 
+SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DLSQUIC_TEST=1")
+
 IF (MSVC)
     SET(ADDL_SOURCES ../../wincompat/getopt.c ../../wincompat/getopt1.c)
     SET(LIB_FLAGS "-FORCE:MULTIPLE")
 ELSE()
     SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-unused-value")
+    IF (CMAKE_C_COMPILER_ID STREQUAL GNU)
+        SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-override-init")
+    ENDIF()
+    IF (CMAKE_C_COMPILER_ID STREQUAL Clang)
+        SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-initializer-overrides")
+    ENDIF()
 ENDIF()
+
+include_directories(../../src/liblsquic/ls-qpack)
 
 SET(TESTS
     ackgen_gquic_be
@@ -23,7 +33,6 @@ SET(TESTS
     buf
     conn_close_gquic_be
     conn_close_gquic_le
-    conn_hash
     cubic
     dec
     di_nocopy
@@ -35,9 +44,11 @@ SET(TESTS
     frame_writer
     goaway_gquic_be
     goaway_gquic_le
+    h3_framing
     hkdf
     lsquic_hash
     malo
+    qlog
     packet_out
     packno_len
     parse_packet_in
@@ -51,7 +62,6 @@ SET(TESTS
     senhist
     set
     sfcw
-    some_packets
     spi
     stop_waiting_gquic_be
     stop_waiting_gquic_le
@@ -65,11 +75,6 @@ SET(TESTS
 IF (CMAKE_SYSTEM_NAME STREQUAL "Linux")
     # Linux has fmemopen
     SET(TESTS ${TESTS} frame_rw)
-ENDIF()
-
-IF (NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
-    # Linux has fmemopen
-    SET(TESTS ${TESTS} qlog)
 ENDIF()
 
 

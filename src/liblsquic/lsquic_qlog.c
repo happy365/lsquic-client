@@ -5,14 +5,8 @@
 #include <inttypes.h>
 #include <string.h>
 #include <sys/queue.h>
-#ifdef WIN32
-#include <Ws2tcpip.h>
-#else
-#include <sys/types.h>
-#include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#endif
 
 #include "lsquic.h"
 #include "lsquic_types.h"
@@ -34,7 +28,7 @@
 
 
 void
-lsquic_qlog_create_connection (lsquic_cid_t cid,
+lsquic_qlog_create_connection (const lsquic_cid_t* cid,
                                 const struct sockaddr *local_sa,
                                 const struct sockaddr *peer_sa)
 {
@@ -94,7 +88,7 @@ lsquic_qlog_create_connection (lsquic_cid_t cid,
      sizeof(QLOG_FRAME_DICT_SUFFIX)))
 
 void
-lsquic_qlog_packet_rx (lsquic_cid_t cid,
+lsquic_qlog_packet_rx (const lsquic_cid_t* cid,
                         const struct lsquic_packet_in *packet_in,
                         const unsigned char *packet_in_data,
                         size_t packet_in_size)
@@ -154,7 +148,7 @@ lsquic_qlog_packet_rx (lsquic_cid_t cid,
 
 
 void
-lsquic_qlog_hsk_completed (lsquic_cid_t cid)
+lsquic_qlog_hsk_completed (const lsquic_cid_t* cid)
 {
     LCID("[%" PRIu64 ",\"CONNECTIVITY\",\"HANDSHAKE\",\"PACKET_RX\","
             "{\"status\":\"complete\"}]", lsquic_time_now());
@@ -162,7 +156,7 @@ lsquic_qlog_hsk_completed (lsquic_cid_t cid)
 
 
 void
-lsquic_qlog_zero_rtt (lsquic_cid_t cid)
+lsquic_qlog_zero_rtt (const lsquic_cid_t* cid)
 {
     LCID("[%" PRIu64 ",\"RECOVERY\",\"RTT_UPDATE\",\"PACKET_RX\","
             "{\"zero_rtt\":\"successful\"}]", lsquic_time_now());
@@ -170,7 +164,7 @@ lsquic_qlog_zero_rtt (lsquic_cid_t cid)
 
 
 void
-lsquic_qlog_check_certs (lsquic_cid_t cid, const lsquic_str_t **certs,
+lsquic_qlog_check_certs (const lsquic_cid_t* cid, const lsquic_str_t **certs,
                                                                 size_t count)
 {
     size_t i;
@@ -199,7 +193,7 @@ lsquic_qlog_check_certs (lsquic_cid_t cid, const lsquic_str_t **certs,
 
 
 void
-lsquic_qlog_version_negotiation (lsquic_cid_t cid,
+lsquic_qlog_version_negotiation (const lsquic_cid_t* cid,
                                         const char *action, const char *ver)
 {
     char *trig;
@@ -208,7 +202,7 @@ lsquic_qlog_version_negotiation (lsquic_cid_t cid,
         return;
     if (strcmp(action, "proposed") == 0)
         trig = "LINE";
-    else if (strcmp(action, "agreed") == 0)
+    else if (strcmp(action, "supports") == 0 || strcmp(action, "agreed") == 0)
         trig = "PACKET_RX";
     else
         return;

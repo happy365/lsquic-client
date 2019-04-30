@@ -97,7 +97,7 @@ lsquic_is_zero (const void *pbuf, size_t bufsz)
 }
 
 
-/* XXX this function uses static buffer.  Replace it with hexdump() if possible */
+/* XXX this function uses static buffer.  Replace it with lsquic_hexdump() if possible */
 char *get_bin_str(const void *s, size_t len, size_t max_display_len)
 {
     const unsigned char *p, *pEnd;
@@ -156,8 +156,29 @@ lsquic_hex_encode (const void *src, size_t src_sz, void *dst, size_t dst_sz)
 }
 
 
+void
+lsquic_hexstr (const unsigned char *buf, size_t bufsz, char *out, size_t outsz)
+{
+    static const char b2c[16] = "0123456789ABCDEF";
+    const unsigned char *const end_input = buf + bufsz;
+    char *const end_output = out + outsz;
+
+    while (buf < end_input && out + 2 < end_output)
+    {
+        *out++ = b2c[ *buf >> 4 ];
+        *out++ = b2c[ *buf & 0xF ];
+        ++buf;
+    }
+
+    if (buf < end_input)
+        out[-1] = '!';
+
+    *out = '\0';
+}
+
+
 size_t
-hexdump (const void *src_void, size_t src_sz, char *out, size_t out_sz)
+lsquic_hexdump (const void *src_void, size_t src_sz, char *out, size_t out_sz)
 {
 /* Ruler:
  *
@@ -179,7 +200,7 @@ hexdump (const void *src_void, size_t src_sz, char *out, size_t out_sz)
             limit = src_end;
         unsigned hex_off   = 6;
         unsigned alpha_off = 57;
-        sprintf(out, "%04x", line++);
+        sprintf(out, "%03X0", line++);
         out[4] = ' ';
         out[5] = ' ';
         while (src < limit)

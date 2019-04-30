@@ -22,10 +22,12 @@
 #include "lsquic_http1x_if.h"
 #include "lsquic_headers.h"
 #include "lsquic_ev_log.h"
+#include "lsquic_hash.h"
 #include "lsquic_conn.h"
 
 #define LSQUIC_LOGGER_MODULE LSQLM_FRAME_READER
-#define LSQUIC_LOG_CONN_ID lsquic_conn_id(lsquic_stream_conn(fr->fr_stream))
+#define LSQUIC_LOG_CONN_ID lsquic_conn_log_cid(lsquic_stream_conn(\
+                                                            fr->fr_stream))
 #include "lsquic_logger.h"
 
 
@@ -200,7 +202,7 @@ lsquic_frame_reader_new (enum frame_reader_flags flags,
     if (hsi_if == lsquic_http1x_if)
     {
         fr->fr_h1x_ctor_ctx = (struct http1x_ctor_ctx) {
-            .cid            = LSQUIC_LOG_CONN_ID,
+            .conn           = lsquic_stream_conn(stream),
             .max_headers_sz = fr->fr_max_headers_sz,
             .is_server      = fr->fr_flags & FRF_SERVER,
         };
@@ -517,6 +519,7 @@ decode_and_pass_payload (struct lsquic_frame_reader *fr)
     uint32_t name_idx;
     lshpack_strlen_t name_len, val_len;
     char *buf;
+    uint32_t stream_id32;
     struct uncompressed_headers *uh = NULL;
     void *hset = NULL;
 
@@ -575,9 +578,9 @@ decode_and_pass_payload (struct lsquic_frame_reader *fr)
         goto stream_error;
     }
 
-    memcpy(&uh->uh_stream_id, fr->fr_state.header.hfh_stream_id,
-                                                sizeof(uh->uh_stream_id));
-    uh->uh_stream_id     = ntohl(uh->uh_stream_id);
+    memcpy(&stream_id32, fr->fr_state.header.hfh_stream_id,
+                                                sizeof(stream_id32));
+    uh->uh_stream_id     = ntohl(stream_id32);
     uh->uh_oth_stream_id = hs->oth_stream_id;
     if (HTTP_FRAME_HEADERS == fr->fr_state.by_type.headers_state.frame_type)
     {
